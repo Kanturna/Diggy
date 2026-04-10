@@ -6,12 +6,14 @@ const WorldGeneratorScript = preload("res://core/world/WorldGenerator.gd")
 const RendererScript = preload("res://render/WorldMaterialRenderer.gd")
 const CameraControllerScript = preload("res://camera/CameraController.gd")
 const DebugOverlayScene = preload("res://debug/DebugOverlay.tscn")
+const CreatureManagerScript = preload("res://units/CreatureManager.gd")
 
 var world_model: WorldModel
 var world_generator: WorldGenerator
 var renderer: WorldMaterialRenderer
 var camera_controller: CameraController
 var debug_overlay: DebugOverlay
+var creature_manager: CreatureManager
 var _startup_timings := {}
 
 func _ready() -> void:
@@ -38,6 +40,10 @@ func _ready() -> void:
 	_startup_timings["camera_setup_ms"] = Time.get_ticks_msec() - step_begin_ms
 
 	step_begin_ms = Time.get_ticks_msec()
+	_setup_creatures()
+	_startup_timings["creature_setup_ms"] = Time.get_ticks_msec() - step_begin_ms
+
+	step_begin_ms = Time.get_ticks_msec()
 	_setup_debug()
 	_startup_timings["debug_setup_ms"] = Time.get_ticks_msec() - step_begin_ms
 
@@ -47,6 +53,8 @@ func _ready() -> void:
 	_startup_timings["ready_total_ms"] = Time.get_ticks_msec() - startup_begin_ms
 	if debug_overlay != null:
 		debug_overlay.set_startup_timings(_startup_timings)
+		if creature_manager != null:
+			debug_overlay.set_creature_count(creature_manager.creatures.size())
 
 func _process(_delta: float) -> void:
 	_on_chunks_dirtied()
@@ -93,6 +101,11 @@ func _setup_camera() -> void:
 		Config.WORLD_WIDTH * Config.CELL_SIZE * 0.5,
 		Config.WORLD_HEIGHT * Config.CELL_SIZE * 0.5
 	)
+
+func _setup_creatures() -> void:
+	creature_manager = CreatureManagerScript.new()
+	add_child(creature_manager)
+	creature_manager.setup(world_model)
 
 func _setup_debug() -> void:
 	debug_overlay = DebugOverlayScene.instantiate()
