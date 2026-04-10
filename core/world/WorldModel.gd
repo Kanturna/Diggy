@@ -159,7 +159,7 @@ func is_frontier_earth_block(cell: Vector2i) -> bool:
 	if get_material(cell.x, cell.y) != MaterialType.Id.EARTH:
 		return false
 	for offset in [Vector2i.LEFT, Vector2i.RIGHT, Vector2i.UP, Vector2i.DOWN]:
-		var neighbor := cell + offset
+		var neighbor: Vector2i = cell + offset
 		if not is_in_bounds(neighbor.x, neighbor.y):
 			continue
 		if get_material(neighbor.x, neighbor.y) == MaterialType.Id.EMPTY:
