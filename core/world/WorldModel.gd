@@ -3,6 +3,7 @@ class_name WorldModel
 
 const MaterialType = preload("res://core/MaterialType.gd")
 const CellFlags = preload("res://core/CellFlags.gd")
+const Config = preload("res://core/Config.gd")
 
 signal world_reset
 
@@ -137,5 +138,5 @@ func _default_flags_for_material(material: int) -> int:
 
 func _default_variant_for_material(index: int, material: int) -> int:
 	if material == MaterialType.Id.EARTH:
-		return clampi(variants[index], 0, 5)
+		return clampi(variants[index], 0, Config.EARTH_VARIANT_COUNT - 1)
 	return 0
