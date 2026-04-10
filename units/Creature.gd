@@ -72,7 +72,7 @@ var _region_anchor := Vector2i(-1, -1)
 var _region_members: Dictionary = {}
 var _region_list: Array[Vector2i] = []
 
-var _current_cave_key := ""
+var _known_cave_anchor := Vector2i(-1, -1)
 var _cave_scanned := false
 var _survey_path: Array[Vector2i] = []
 var _survey_index := 0
@@ -145,12 +145,11 @@ func _refresh_cave_context(force_reset: bool) -> void:
 	if region.is_empty():
 		return
 
-	var cave_key: String = _make_cave_key(region)
-	var cave_changed: bool = force_reset or cave_key != _current_cave_key
+	var cave_changed: bool = force_reset or _known_cave_anchor.x < 0 or not region.has(_known_cave_anchor)
 	if not cave_changed:
 		return
 
-	_current_cave_key = cave_key
+	_known_cave_anchor = origin_cell
 	_cave_scanned = false
 	_survey_path = _build_survey_path(region)
 	_survey_index = 0
@@ -308,7 +307,7 @@ func _collect_frontier_candidates() -> Array[Dictionary]:
 				var key := "%s|%s|%s" % [cell, second_mouth, direction]
 				if seen.has(key):
 					continue
-				var external := _find_external_empty_for_frontier(cell, direction, region_map)
+				var external: Vector2i = _find_external_empty_for_frontier(cell, direction, region_map)
 				if external.x < 0:
 					continue
 				seen[key] = true
@@ -377,7 +376,7 @@ func _next_dig_cell() -> Vector2i:
 	while true:
 		if not _dig_row_pending.is_empty():
 			return _dig_row_pending.pop_front()
-		var next_row := _build_dig_row(_dig_depth)
+		var next_row: Array[Vector2i] = _build_dig_row(_dig_depth)
 		if next_row.is_empty():
 			return Vector2i(-1, -1)
 		_dig_depth += 1
@@ -417,7 +416,7 @@ func _build_survey_path(region: Dictionary) -> Array[Vector2i]:
 	for cell in region.keys():
 		var current: Vector2i = cell
 		for offset in CARDINAL_DIRS:
-			var neighbor := current + offset
+			var neighbor: Vector2i = current + offset
 			if not world.is_in_bounds(neighbor.x, neighbor.y):
 				continue
 			if world.get_material(neighbor.x, neighbor.y) == MaterialType.Id.EARTH:
@@ -426,30 +425,22 @@ func _build_survey_path(region: Dictionary) -> Array[Vector2i]:
 	if boundary.is_empty():
 		return boundary
 
-	var centroid := Vector2.ZERO
-	for cell in boundary:
-		centroid += Vector2(float(cell.x), float(cell.y))
-	centroid /= float(boundary.size())
-	boundary.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
-		var angle_a := atan2(float(a.y) - centroid.y, float(a.x) - centroid.x)
-		var angle_b := atan2(float(b.y) - centroid.y, float(b.x) - centroid.x)
-		return angle_a < angle_b
-	)
-	return boundary
-
-func _make_cave_key(region: Dictionary) -> String:
-	var count := region.size()
-	var min_x := world.width
-	var min_y := world.height
-	var max_x := 0
-	var max_y := 0
-	for cell in region.keys():
-		var current: Vector2i = cell
-		min_x = mini(min_x, current.x)
-		min_y = mini(min_y, current.y)
-		max_x = maxi(max_x, current.x)
-		max_y = maxi(max_y, current.y)
-	return "%d:%d:%d:%d:%d" % [count, min_x, min_y, max_x, max_y]
+	var ordered: Array[Vector2i] = []
+	var remaining: Array[Vector2i] = boundary.duplicate()
+	var current_pick: Vector2i = _world_to_cell(global_position)
+	while not remaining.is_empty():
+		var best_index := 0
+		var best_distance := INF
+		for i in range(remaining.size()):
+			var candidate: Vector2i = remaining[i]
+			var distance := current_pick.distance_squared_to(candidate)
+			if distance < best_distance:
+				best_distance = distance
+				best_index = i
+		current_pick = remaining[best_index]
+		ordered.append(current_pick)
+		remaining.remove_at(best_index)
+	return ordered
 
 func _set_random_wander_target() -> void:
 	_intent = Intent.WANDER
