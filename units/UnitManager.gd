@@ -83,3 +83,8 @@ func debug_snapshot() -> Dictionary:
 	if _creatures.is_empty():
 		return {}
 	return _creatures[0].get_debug_snapshot()
+
+func frontier_debug_snapshot() -> Dictionary:
+	if _creatures.is_empty():
+		return {}
+	return _creatures[0].get_frontier_debug_snapshot()

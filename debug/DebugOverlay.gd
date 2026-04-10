@@ -76,12 +76,19 @@ func _build_debug_text(cell: Vector2i) -> String:
 				]
 			)
 			lines.append(
-				"Dir: (%.2f, %.2f) path=%d/%d cluster=%s" % [
+				"Dir: (%.2f, %.2f) path=%d/%d cost=%d" % [
 					target_dir.x,
 					target_dir.y,
 					int(creature_debug.get("path_index", 0)),
 					int(creature_debug.get("path_len", 0)),
+					int(creature_debug.get("path_cost", 0)),
+				]
+			)
+			lines.append(
+				"Cluster: %s score=%.2f prospect=%.2f" % [
 					str(creature_debug.get("selected_cluster_id", "")),
+					float(creature_debug.get("frontier_score", 0.0)),
+					float(creature_debug.get("frontier_prospect", 0.0)),
 				]
 			)
 			lines.append(
@@ -92,6 +99,7 @@ func _build_debug_text(cell: Vector2i) -> String:
 					int(creature_debug.get("frontier_cluster_count", 0)),
 				]
 			)
+			lines.append("Heatmap: V")
 			lines.append("Replan: %s" % str(creature_debug.get("replan_reason", "")))
 	if not startup_timings.is_empty():
 		lines.append(

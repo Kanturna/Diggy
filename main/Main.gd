@@ -6,6 +6,7 @@ const WorldGeneratorScript = preload("res://core/world/WorldGenerator.gd")
 const RendererScript = preload("res://render/WorldMaterialRenderer.gd")
 const CameraControllerScript = preload("res://camera/CameraController.gd")
 const DebugOverlayScene  = preload("res://debug/DebugOverlay.tscn")
+const FrontierHeatOverlayScript = preload("res://debug/FrontierHeatOverlay.gd")
 const UnitManagerScript  = preload("res://units/UnitManager.gd")
 
 var world_model: WorldModel
@@ -13,6 +14,7 @@ var world_generator: WorldGenerator
 var renderer: WorldMaterialRenderer
 var camera_controller: CameraController
 var debug_overlay: DebugOverlay
+var frontier_heat_overlay: FrontierHeatOverlay
 var unit_manager: UnitManager
 var _startup_timings := {}
 
@@ -54,6 +56,8 @@ func _ready() -> void:
 	if debug_overlay != null:
 		debug_overlay.set_startup_timings(_startup_timings)
 		debug_overlay.unit_manager = unit_manager
+	if frontier_heat_overlay != null:
+		frontier_heat_overlay.unit_manager = unit_manager
 
 func _process(_delta: float) -> void:
 	_on_chunks_dirtied()
@@ -67,6 +71,7 @@ func _setup_input_map() -> void:
 	_ensure_action(Config.ZOOM_IN_ACTION, KEY_Q)
 	_ensure_action(Config.ZOOM_OUT_ACTION, KEY_E)
 	_ensure_action(Config.DEBUG_TOGGLE_ACTION, KEY_F3)
+	_ensure_action(Config.FRONTIER_DEBUG_TOGGLE_ACTION, KEY_V)
 
 func _ensure_action(action_name: String, keycode: Key) -> void:
 	if not InputMap.has_action(action_name):
@@ -107,6 +112,8 @@ func _setup_units() -> void:
 	unit_manager.setup(world_model)
 
 func _setup_debug() -> void:
+	frontier_heat_overlay = FrontierHeatOverlayScript.new()
+	add_child(frontier_heat_overlay)
 	debug_overlay = DebugOverlayScene.instantiate()
 	add_child(debug_overlay)
 	debug_overlay.setup(world_model, renderer)
