@@ -4,10 +4,14 @@ class_name UnitManager
 const Config       = preload("res://core/Config.gd")
 const MaterialType = preload("res://core/MaterialType.gd")
 const CreatureGD   = preload("res://units/Creature.gd")
+const CaveRegionAnalysisScript = preload("res://core/world/CaveRegionAnalysis.gd")
 
 var _creatures: Array[Creature] = []
+var _cave_region_analysis: CaveRegionAnalysis = null
 
 func setup(world_model: WorldModel) -> void:
+	_cave_region_analysis = CaveRegionAnalysisScript.new()
+	_cave_region_analysis.setup(world_model)
 	_spawn(world_model)
 
 func _spawn(world: WorldModel) -> void:
@@ -26,7 +30,7 @@ func _spawn(world: WorldModel) -> void:
 			(cy + 0.5) * Config.CELL_SIZE,
 		)
 		add_child(c)
-		c.setup(world)
+		c.setup(world, _cave_region_analysis)
 		_creatures.append(c)
 		spawned += 1
 

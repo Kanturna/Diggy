@@ -41,11 +41,15 @@ const STEER_ANGLES := [
 	PI * 0.375,
 	-PI * 0.375,
 ]
-const CARDINAL_DIRS: Array[Vector2i] = [Vector2i.RIGHT, Vector2i.DOWN, Vector2i.LEFT, Vector2i.UP]
+const CARDINAL_DIRS: Array[Vector2i] = [
+	Vector2i.RIGHT,
+	Vector2i.DOWN,
+	Vector2i.LEFT,
+	Vector2i.UP,
+]
 
 enum Intent {
 	WANDER,
-	SURVEY_CAVE,
 	CHOOSE_FRONTIER,
 	MOVE_TO_FRONTIER,
 	DIG_BLOCK,
@@ -54,6 +58,7 @@ enum Intent {
 
 var velocity := Vector2.ZERO
 var world: WorldModel = null
+var cave_analysis: CaveRegionAnalysis = null
 
 var _chain_pos: Array[Vector2] = []
 var _chain_lag := [0.0, 0.18, 0.12, 0.22, 0.18]
@@ -62,27 +67,20 @@ var _swim_phase := 0.0
 var _polys: Array[PackedVector2Array] = []
 
 var _intent := Intent.WANDER
-var _current_action := "move"
+var _current_action := "idle"
 var _last_position := Vector2.ZERO
 var _stuck_timer := 0.0
 var _intent_timer := 0.0
 
-var _region_revision := -1
-var _region_anchor := Vector2i(-1, -1)
-var _region_members: Dictionary = {}
-var _region_list: Array[Vector2i] = []
-
-var _known_cave_anchor := Vector2i(-1, -1)
-var _cave_scanned := false
-var _survey_path: Array[Vector2i] = []
-var _survey_index := 0
-var _frontier_candidates: Array[Dictionary] = []
-var _frontier_target: Dictionary = {}
+var _current_snapshot: Dictionary = {}
+var _traversal_plan: Dictionary = {}
+var _current_path_index := 0
 var _move_target_cell := Vector2i(-1, -1)
-var _dig_depth := 1
-var _dig_row_pending: Array[Vector2i] = []
 var _current_dig_cell := Vector2i(-1, -1)
+var _dig_head_cell := Vector2i(-1, -1)
+var _dig_direction := Vector2i.RIGHT
 var _dig_progress := 0.0
+var _replan_reason := "startup"
 
 func _ready() -> void:
 	_chain_pos.resize(5)
@@ -92,31 +90,28 @@ func _ready() -> void:
 	for i in 6:
 		_polys[i] = PackedVector2Array()
 	_last_position = global_position
-	_set_random_wander_target()
+	_set_random_wander_target("startup")
 
-func setup(world_model: WorldModel) -> void:
+func setup(world_model: WorldModel, analysis: CaveRegionAnalysis) -> void:
 	world = world_model
+	cave_analysis = analysis
 	_last_position = global_position
-	_refresh_cave_context(true)
+	_request_frontier_plan("startup")
 
 func _process(delta: float) -> void:
 	_intent_timer -= delta
-	if world != null:
-		_refresh_cave_context(false)
-
-	match _intent:
-		Intent.WANDER:
-			_tick_wander(delta)
-		Intent.SURVEY_CAVE:
-			_tick_survey(delta)
-		Intent.CHOOSE_FRONTIER:
-			_tick_choose_frontier()
-		Intent.MOVE_TO_FRONTIER:
-			_tick_move_to_frontier(delta)
-		Intent.DIG_BLOCK:
-			_tick_dig_block(delta)
-		Intent.SEEK_FOOD:
-			_tick_wander(delta)
+	if world != null and cave_analysis != null:
+		match _intent:
+			Intent.WANDER:
+				_tick_wander(delta)
+			Intent.CHOOSE_FRONTIER:
+				_tick_choose_frontier()
+			Intent.MOVE_TO_FRONTIER:
+				_tick_move_to_frontier(delta)
+			Intent.DIG_BLOCK:
+				_tick_dig_block(delta)
+			Intent.SEEK_FOOD:
+				_tick_wander(delta)
 
 	_update_stuck_state(delta)
 	_update_chain(delta)
@@ -124,151 +119,113 @@ func _process(delta: float) -> void:
 	queue_redraw()
 
 func get_debug_snapshot() -> Dictionary:
+	var region_anchor: Vector2i = _current_snapshot.get("region_id_anchor", Vector2i(-1, -1))
+	var staging_cell: Vector2i = _traversal_plan.get("staging_cell", Vector2i(-1, -1))
+	var first_frontier_cell: Vector2i = _traversal_plan.get("first_frontier_cell", Vector2i(-1, -1))
 	return {
 		"intent": _intent_name(_intent),
 		"action": _current_action,
 		"target_cell": _move_target_cell,
-		"frontier_cell": _frontier_target.get("entry_cell", Vector2i(-1, -1)),
+		"frontier_cell": first_frontier_cell,
 		"dig_cell": _current_dig_cell,
 		"target_direction": _frontier_direction_vector(),
 		"replan_in": maxf(_intent_timer, 0.0),
-		"cave_scanned": _cave_scanned,
-		"survey_progress": "%d/%d" % [_survey_index, _survey_path.size()],
 		"dig_progress": _dig_progress,
+		"region_id_anchor": region_anchor,
+		"region_size": int(_current_snapshot.get("region_size", 0)),
+		"frontier_cluster_count": _snapshot_frontier_clusters().size(),
+		"selected_cluster_id": str(_traversal_plan.get("cluster_id", "")),
+		"staging_cell": staging_cell,
+		"path_len": _plan_path_cells().size(),
+		"path_index": _current_path_index,
+		"first_frontier_cell": first_frontier_cell,
+		"replan_reason": _replan_reason,
 	}
-
-func _refresh_cave_context(force_reset: bool) -> void:
-	var origin_cell: Vector2i = _world_to_cell(global_position)
-	if world == null or not world.is_in_bounds(origin_cell.x, origin_cell.y):
-		return
-	var region: Dictionary = _get_current_region(origin_cell)
-	if region.is_empty():
-		return
-
-	var cave_changed: bool = force_reset or _known_cave_anchor.x < 0 or not region.has(_known_cave_anchor)
-	if not cave_changed:
-		return
-
-	_known_cave_anchor = origin_cell
-	_cave_scanned = false
-	_survey_path = _build_survey_path(region)
-	_survey_index = 0
-	_frontier_candidates.clear()
-	_frontier_target.clear()
-	_move_target_cell = Vector2i(-1, -1)
-	_current_dig_cell = Vector2i(-1, -1)
-	_dig_depth = 1
-	_dig_row_pending.clear()
-	_dig_progress = 0.0
-	_stuck_timer = 0.0
-
-	if _survey_path.is_empty():
-		_cave_scanned = true
-		_intent = Intent.CHOOSE_FRONTIER
-		_current_action = "choose"
-	else:
-		_intent = Intent.SURVEY_CAVE
-		_current_action = "survey"
-		_move_target_cell = _survey_path[0]
 
 func _tick_wander(delta: float) -> void:
 	if _intent_timer <= 0.0:
-		_set_random_wander_target()
+		_request_frontier_plan("wander_retry")
+		return
+
 	var move_dir: Vector2 = _best_open_direction((_cell_center(_move_target_cell) - global_position).normalized())
 	if move_dir == Vector2.ZERO:
-		_set_random_wander_target()
+		_set_random_wander_target("wander_blocked")
 		return
 	_move_along(move_dir, delta)
 	_current_action = "move"
-
-func _tick_survey(delta: float) -> void:
-	if _survey_index >= _survey_path.size():
-		_cave_scanned = true
-		_intent = Intent.CHOOSE_FRONTIER
-		_current_action = "choose"
-		return
-
-	_move_target_cell = _survey_path[_survey_index]
-	var move_dir: Vector2 = _best_open_direction((_cell_center(_move_target_cell) - global_position).normalized())
-	if move_dir == Vector2.ZERO:
-		_survey_index += 1
-		return
-	_move_along(move_dir, delta)
-	_current_action = "survey"
-
-	if _distance_to_cell(_move_target_cell) <= Config.CREATURE_SURVEY_REACHED_CELLS:
-		_survey_index += 1
-		if _survey_index >= _survey_path.size():
-			_frontier_candidates = _collect_frontier_candidates()
-			_cave_scanned = true
-			_intent = Intent.CHOOSE_FRONTIER
-			_current_action = "choose"
 
 func _tick_choose_frontier() -> void:
-	if _frontier_candidates.is_empty():
-		_frontier_candidates = _collect_frontier_candidates()
-	if _frontier_candidates.is_empty():
-		_set_random_wander_target()
+	var origin_cell: Vector2i = _world_to_cell(global_position)
+	if not _can_analyze_from_cell(origin_cell):
+		_set_random_wander_target("choose_invalid_origin")
 		return
 
-	_frontier_target = _choose_best_frontier()
-	if _frontier_target.is_empty():
-		_set_random_wander_target()
+	var snapshot := cave_analysis.get_region_snapshot(origin_cell)
+	if snapshot.is_empty():
+		_set_random_wander_target("choose_no_snapshot")
 		return
 
-	var mouth_cells_variant = _frontier_target.get("mouth_cells", [])
-	var mouth_cells: Array[Vector2i] = []
-	for mouth_cell in mouth_cells_variant:
-		mouth_cells.append(mouth_cell)
-	_move_target_cell = mouth_cells[0] if not mouth_cells.is_empty() else _frontier_target.get("entry_cell", Vector2i(-1, -1))
-	if mouth_cells.size() > 1 and _distance_to_cell(mouth_cells[1]) < _distance_to_cell(_move_target_cell):
-		_move_target_cell = mouth_cells[1]
-	_dig_depth = 1
-	_dig_row_pending.clear()
-	_current_dig_cell = Vector2i(-1, -1)
-	_dig_progress = 0.0
-	_intent = Intent.MOVE_TO_FRONTIER
-	_intent_timer = Config.CREATURE_FRONTIER_REPLAN_SECONDS
-	_current_action = "move"
+	_current_snapshot = snapshot
+	var reachability := cave_analysis.build_reachability(snapshot, origin_cell)
+	var traversal_plan := _choose_best_traversal_plan(snapshot, reachability, origin_cell)
+	if traversal_plan.is_empty():
+		_set_random_wander_target("choose_no_reachable_frontier")
+		return
+
+	_adopt_traversal_plan(traversal_plan)
+	if _plan_path_cells().size() <= 1:
+		_start_dig_from_current_plan()
 
 func _tick_move_to_frontier(delta: float) -> void:
-	if _frontier_target.is_empty():
-		_intent = Intent.CHOOSE_FRONTIER
+	var replan_reason := _move_replan_reason()
+	if not replan_reason.is_empty():
+		_request_frontier_plan(replan_reason)
 		return
+
+	var path_cells := _plan_path_cells()
+	if path_cells.is_empty():
+		_request_frontier_plan("path_missing")
+		return
+
+	_advance_path_index(path_cells)
+	if _is_at_staging_cell():
+		_start_dig_from_current_plan()
+		return
+
+	if _current_path_index >= path_cells.size():
+		_move_target_cell = _traversal_plan.get("staging_cell", Vector2i(-1, -1))
+	else:
+		_move_target_cell = path_cells[_current_path_index]
+
 	var move_dir: Vector2 = _best_open_direction((_cell_center(_move_target_cell) - global_position).normalized())
 	if move_dir == Vector2.ZERO:
-		if _stuck_timer >= Config.CREATURE_STUCK_REPLAN_SECONDS:
-			_intent = Intent.CHOOSE_FRONTIER
+		velocity = Vector2.ZERO
 		return
+
 	_move_along(move_dir, delta)
 	_current_action = "move"
-	if _distance_to_cell(_move_target_cell) <= Config.CREATURE_TARGET_REACHED_CELLS:
-		_intent = Intent.DIG_BLOCK
-		_current_action = "dig"
-		_dig_progress = 0.0
-		_current_dig_cell = Vector2i(-1, -1)
-		_dig_row_pending.clear()
+	_advance_path_index(path_cells)
+	if _is_at_staging_cell():
+		_start_dig_from_current_plan()
 
 func _tick_dig_block(delta: float) -> void:
-	if _frontier_target.is_empty():
-		_intent = Intent.CHOOSE_FRONTIER
-		return
-	if _external_target_reached():
-		_refresh_cave_context(true)
+	if _traversal_plan.is_empty():
+		_request_frontier_plan("dig_missing_plan")
 		return
 
 	if _current_dig_cell.x < 0:
-		_current_dig_cell = _next_dig_cell()
+		_current_dig_cell = _choose_next_dig_cell()
 		_dig_progress = 0.0
 		if _current_dig_cell.x < 0:
-			_intent = Intent.CHOOSE_FRONTIER
-			_current_action = "choose"
+			_request_frontier_plan("dig_no_frontier")
 			return
 
 	if not world.is_frontier_earth_block(_current_dig_cell):
-		_current_dig_cell = Vector2i(-1, -1)
+		_current_dig_cell = _choose_next_dig_cell()
 		_dig_progress = 0.0
-		return
+		if _current_dig_cell.x < 0:
+			_request_frontier_plan("dig_invalid_frontier")
+			return
 
 	velocity = Vector2.ZERO
 	_current_action = "dig"
@@ -276,177 +233,287 @@ func _tick_dig_block(delta: float) -> void:
 	if _dig_progress < Config.CREATURE_DIG_BLOCK_SECONDS:
 		return
 
-	var carved := world.carve_earth_cell(_current_dig_cell)
-	_dig_progress = 0.0
-	if carved:
-		_invalidate_region_cache()
-		_region_revision = -1
-	_current_dig_cell = Vector2i(-1, -1)
+	if world.carve_earth_cell(_current_dig_cell):
+		_dig_head_cell = _current_dig_cell
+		global_position = _cell_center(_dig_head_cell)
+		_dig_progress = 0.0
+		_current_dig_cell = Vector2i(-1, -1)
+		if _has_broken_through():
+			_request_frontier_plan("dig_breakthrough")
+			return
+	else:
+		_dig_progress = 0.0
+		_current_dig_cell = Vector2i(-1, -1)
 
-	if _external_target_reached():
-		_refresh_cave_context(true)
-		return
-
-func _collect_frontier_candidates() -> Array[Dictionary]:
-	var region_map := _region_members
-	var candidates: Array[Dictionary] = []
-	var seen: Dictionary = {}
-	for cell in _survey_path:
-		for direction in CARDINAL_DIRS:
-			var front_block: Vector2i = cell + direction
-			if not world.is_frontier_earth_block(front_block):
+func _choose_best_traversal_plan(snapshot: Dictionary, reachability: Dictionary, origin_cell: Vector2i) -> Dictionary:
+	var best_plan: Dictionary = {}
+	for cluster in _snapshot_frontier_clusters():
+		var staging_cells: Array[Vector2i] = _cluster_staging_cells(cluster)
+		for staging_cell in staging_cells:
+			var distance_map: Dictionary = reachability.get("distance", {})
+			if not distance_map.has(staging_cell):
 				continue
-			var perpendicular: Vector2i = Vector2i(direction.y, -direction.x)
-			for side_sign in [-1, 1]:
-				var second_mouth: Vector2i = cell + perpendicular * side_sign
-				if not region_map.has(second_mouth):
-					continue
-				var second_front: Vector2i = second_mouth + direction
-				if not world.is_frontier_earth_block(second_front):
-					continue
-				var key := "%s|%s|%s" % [cell, second_mouth, direction]
-				if seen.has(key):
-					continue
-				var external: Vector2i = _find_external_empty_for_frontier(cell, direction, region_map)
-				if external.x < 0:
-					continue
-				seen[key] = true
-				candidates.append({
-					"entry_cell": cell,
-					"mouth_cells": [cell, second_mouth],
-					"direction": direction,
-					"external_cell": external,
-				})
-	return candidates
 
-func _choose_best_frontier() -> Dictionary:
-	var best: Dictionary = {}
-	var best_score := -INF
-	for candidate in _frontier_candidates:
-		var entry_cell: Vector2i = candidate.get("entry_cell", Vector2i(-1, -1))
-		var external_cell: Vector2i = candidate.get("external_cell", Vector2i(-1, -1))
-		if entry_cell.x < 0 or external_cell.x < 0:
-			continue
-		var to_external := Vector2(
-			float(external_cell.x - entry_cell.x),
-			float(external_cell.y - entry_cell.y)
-		)
-		var distance_score := 1.0 / maxf(to_external.length(), 1.0)
-		var direction_value: Vector2i = candidate.get("direction", Vector2i.RIGHT)
-		var direction_vec: Vector2 = Vector2(float(direction_value.x), float(direction_value.y)).normalized()
-		var alignment_score := 0.5
-		if _facing_dir.length_squared() > 0.0001:
-			alignment_score = (_facing_dir.normalized().dot(direction_vec) + 1.0) * 0.5
-		var score := distance_score * Config.CREATURE_CONNECT_DISTANCE_WEIGHT
-		score += alignment_score * Config.CREATURE_CONNECT_ALIGNMENT_WEIGHT
-		if score > best_score:
-			best_score = score
-			best = candidate
-	return best
+			var path_cells := cave_analysis.reconstruct_path(reachability, origin_cell, staging_cell)
+			if path_cells.is_empty():
+				continue
 
-func _find_external_empty_for_frontier(entry_cell: Vector2i, direction: Vector2i, region_map: Dictionary) -> Vector2i:
-	var radius := Config.CREATURE_PERCEPTION_RADIUS_CELLS
-	var best_distance := INF
+			var first_frontier_cell := _select_first_frontier_cell(cluster, staging_cell, path_cells)
+			if first_frontier_cell.x < 0:
+				continue
+
+			var dig_direction: Vector2i = first_frontier_cell - staging_cell
+			var path_cost := path_cells.size() - 1
+			var alignment_score := _path_alignment_score(path_cells, dig_direction)
+			var candidate := {
+				"revision": world.revision,
+				"region_id_anchor": snapshot.get("region_id_anchor", Vector2i(-1, -1)),
+				"cluster_id": str(cluster.get("cluster_id", "")),
+				"cluster_size": int(cluster.get("size", 0)),
+				"staging_cell": staging_cell,
+				"path_cells": path_cells,
+				"path_index": 1 if path_cells.size() > 1 else 0,
+				"first_frontier_cell": first_frontier_cell,
+				"dig_direction": dig_direction,
+				"path_cost": path_cost,
+				"alignment_score": alignment_score,
+				"origin_region_lookup": snapshot.get("region_lookup", {}),
+			}
+			if _is_better_traversal_candidate(candidate, best_plan):
+				best_plan = candidate
+	return best_plan
+
+func _is_better_traversal_candidate(candidate: Dictionary, incumbent: Dictionary) -> bool:
+	if incumbent.is_empty():
+		return true
+
+	var candidate_cost := int(candidate.get("path_cost", 1 << 30))
+	var incumbent_cost := int(incumbent.get("path_cost", 1 << 30))
+	if candidate_cost != incumbent_cost:
+		return candidate_cost < incumbent_cost
+
+	var candidate_cluster_size := int(candidate.get("cluster_size", 0))
+	var incumbent_cluster_size := int(incumbent.get("cluster_size", 0))
+	if candidate_cluster_size != incumbent_cluster_size:
+		return candidate_cluster_size > incumbent_cluster_size
+
+	var candidate_alignment := float(candidate.get("alignment_score", -INF))
+	var incumbent_alignment := float(incumbent.get("alignment_score", -INF))
+	if not is_equal_approx(candidate_alignment, incumbent_alignment):
+		return candidate_alignment > incumbent_alignment
+
+	var candidate_staging: Vector2i = candidate.get("staging_cell", Vector2i(-1, -1))
+	var incumbent_staging: Vector2i = incumbent.get("staging_cell", Vector2i(-1, -1))
+	if candidate_staging != incumbent_staging:
+		return _is_cell_before(candidate_staging, incumbent_staging)
+
+	var candidate_frontier: Vector2i = candidate.get("first_frontier_cell", Vector2i(-1, -1))
+	var incumbent_frontier: Vector2i = incumbent.get("first_frontier_cell", Vector2i(-1, -1))
+	return _is_cell_before(candidate_frontier, incumbent_frontier)
+
+func _select_first_frontier_cell(cluster: Dictionary, staging_cell: Vector2i, path_cells: Array[Vector2i]) -> Vector2i:
+	var frontier_cells := _cluster_frontier_cells(cluster)
+	var preferred_dir := _preferred_frontier_direction(path_cells)
 	var best_cell := Vector2i(-1, -1)
-	var origin := Vector2(float(entry_cell.x), float(entry_cell.y))
-	var desired := Vector2(float(direction.x), float(direction.y))
-	for dy in range(-radius, radius + 1):
-		for dx in range(-radius, radius + 1):
-			if dx == 0 and dy == 0:
-				continue
-			if dx * dx + dy * dy > radius * radius:
-				continue
-			var candidate := entry_cell + Vector2i(dx, dy)
-			if not world.is_in_bounds(candidate.x, candidate.y):
-				continue
-			if world.get_material(candidate.x, candidate.y) != MaterialType.Id.EMPTY:
-				continue
-			if region_map.has(candidate):
-				continue
-			var delta := Vector2(float(candidate.x), float(candidate.y)) - origin
-			if desired.dot(delta.normalized()) < 0.45:
-				continue
-			var distance := delta.length()
-			if distance < best_distance:
-				best_distance = distance
-				best_cell = candidate
+	var best_alignment := -INF
+	for frontier_cell in frontier_cells:
+		if not _are_cells_adjacent(frontier_cell, staging_cell):
+			continue
+		var candidate_dir: Vector2i = frontier_cell - staging_cell
+		var alignment := float(candidate_dir.x * preferred_dir.x + candidate_dir.y * preferred_dir.y)
+		if alignment > best_alignment:
+			best_alignment = alignment
+			best_cell = frontier_cell
+			continue
+		if is_equal_approx(alignment, best_alignment) and _is_cell_before(frontier_cell, best_cell):
+			best_cell = frontier_cell
 	return best_cell
 
-func _next_dig_cell() -> Vector2i:
-	while true:
-		if not _dig_row_pending.is_empty():
-			return _dig_row_pending.pop_front()
-		var next_row: Array[Vector2i] = _build_dig_row(_dig_depth)
-		if next_row.is_empty():
-			return Vector2i(-1, -1)
-		_dig_depth += 1
-		_dig_row_pending = next_row
-	return Vector2i(-1, -1)
+func _preferred_frontier_direction(path_cells: Array[Vector2i]) -> Vector2i:
+	if path_cells.size() >= 2:
+		var last_cell: Vector2i = path_cells[path_cells.size() - 1]
+		var previous_cell: Vector2i = path_cells[path_cells.size() - 2]
+		var path_dir := last_cell - previous_cell
+		if path_dir != Vector2i.ZERO:
+			return path_dir
+	return _vector_to_cardinal(_facing_dir)
 
-func _build_dig_row(depth: int) -> Array[Vector2i]:
-	if _frontier_target.is_empty():
-		return []
-	var mouth_cells_variant = _frontier_target.get("mouth_cells", [])
-	var mouth_cells: Array[Vector2i] = []
-	for mouth_cell in mouth_cells_variant:
-		mouth_cells.append(mouth_cell)
-	var direction: Vector2i = _frontier_target.get("direction", Vector2i.RIGHT)
-	var row: Array[Vector2i] = []
-	for mouth in mouth_cells:
-		var block := mouth + direction * depth
-		if not world.is_in_bounds(block.x, block.y):
-			continue
-		if world.get_material(block.x, block.y) == MaterialType.Id.EARTH and world.is_frontier_earth_block(block):
-			if not row.has(block):
-				row.append(block)
-	return row
+func _path_alignment_score(path_cells: Array[Vector2i], dig_direction: Vector2i) -> float:
+	if path_cells.size() >= 2:
+		var path_dir: Vector2i = path_cells[1] - path_cells[0]
+		return float(path_dir.x * dig_direction.x + path_dir.y * dig_direction.y)
+	var facing_cardinal := _vector_to_cardinal(_facing_dir)
+	return float(facing_cardinal.x * dig_direction.x + facing_cardinal.y * dig_direction.y)
 
-func _external_target_reached() -> bool:
-	if _frontier_target.is_empty():
-		return false
-	var external_cell: Vector2i = _frontier_target.get("external_cell", Vector2i(-1, -1))
-	if external_cell.x < 0:
-		return false
-	var origin_cell: Vector2i = _world_to_cell(global_position)
-	var region: Dictionary = _get_current_region(origin_cell)
-	return region.has(external_cell)
+func _adopt_traversal_plan(traversal_plan: Dictionary) -> void:
+	_traversal_plan = traversal_plan
+	_current_path_index = int(traversal_plan.get("path_index", 0))
+	_move_target_cell = traversal_plan.get("staging_cell", Vector2i(-1, -1))
+	_current_dig_cell = Vector2i(-1, -1)
+	_dig_head_cell = Vector2i(-1, -1)
+	_dig_direction = traversal_plan.get("dig_direction", Vector2i.RIGHT)
+	_dig_progress = 0.0
+	_intent = Intent.MOVE_TO_FRONTIER
+	_current_action = "move"
+	_stuck_timer = 0.0
+	_replan_reason = "plan_committed"
 
-func _build_survey_path(region: Dictionary) -> Array[Vector2i]:
-	var boundary: Array[Vector2i] = []
-	for cell in region.keys():
-		var current: Vector2i = cell
-		for offset in CARDINAL_DIRS:
-			var neighbor: Vector2i = current + offset
-			if not world.is_in_bounds(neighbor.x, neighbor.y):
-				continue
-			if world.get_material(neighbor.x, neighbor.y) == MaterialType.Id.EARTH:
-				boundary.append(current)
-				break
-	if boundary.is_empty():
-		return boundary
+func _request_frontier_plan(reason: String) -> void:
+	_replan_reason = reason
+	_traversal_plan.clear()
+	_current_path_index = 0
+	_move_target_cell = Vector2i(-1, -1)
+	_current_dig_cell = Vector2i(-1, -1)
+	_dig_head_cell = Vector2i(-1, -1)
+	_dig_progress = 0.0
+	_intent = Intent.CHOOSE_FRONTIER
+	_current_action = "choose"
+	_intent_timer = 0.0
 
-	var ordered: Array[Vector2i] = []
-	var remaining: Array[Vector2i] = boundary.duplicate()
-	var current_pick: Vector2i = _world_to_cell(global_position)
-	while not remaining.is_empty():
-		var best_index := 0
-		var best_distance := INF
-		for i in range(remaining.size()):
-			var candidate: Vector2i = remaining[i]
-			var distance := current_pick.distance_squared_to(candidate)
-			if distance < best_distance:
-				best_distance = distance
-				best_index = i
-		current_pick = remaining[best_index]
-		ordered.append(current_pick)
-		remaining.remove_at(best_index)
-	return ordered
-
-func _set_random_wander_target() -> void:
+func _set_random_wander_target(reason: String) -> void:
+	_replan_reason = reason
 	_intent = Intent.WANDER
 	_current_action = "move"
 	_intent_timer = randf_range(Config.CREATURE_TURN_INTERVAL_MIN, Config.CREATURE_TURN_INTERVAL_MAX)
 	_move_target_cell = _world_to_cell(global_position + Vector2.from_angle(randf() * TAU) * Config.CELL_SIZE * 6.0)
+
+func _move_replan_reason() -> String:
+	if _traversal_plan.is_empty():
+		return "no_plan"
+	if int(_traversal_plan.get("revision", -1)) != world.revision:
+		return "world_revision"
+	if _stuck_timer >= Config.CREATURE_STUCK_REPLAN_SECONDS:
+		return "stuck"
+
+	var staging_cell: Vector2i = _traversal_plan.get("staging_cell", Vector2i(-1, -1))
+	if not _is_empty_cell(staging_cell):
+		return "staging_invalid"
+
+	var path_cells := _plan_path_cells()
+	if path_cells.is_empty():
+		return "path_empty"
+
+	for i in range(_current_path_index, path_cells.size()):
+		if not _is_empty_cell(path_cells[i]):
+			return "path_invalid"
+	return ""
+
+func _advance_path_index(path_cells: Array[Vector2i]) -> void:
+	while _current_path_index < path_cells.size():
+		if _distance_to_cell(path_cells[_current_path_index]) > Config.CREATURE_PATH_NODE_REACHED_CELLS:
+			return
+		_current_path_index += 1
+
+func _is_at_staging_cell() -> bool:
+	if _traversal_plan.is_empty():
+		return false
+	var staging_cell: Vector2i = _traversal_plan.get("staging_cell", Vector2i(-1, -1))
+	if staging_cell.x < 0:
+		return false
+	return _distance_to_cell(staging_cell) <= Config.CREATURE_STAGING_REACHED_CELLS
+
+func _start_dig_from_current_plan() -> void:
+	if _traversal_plan.is_empty():
+		_request_frontier_plan("dig_missing_plan")
+		return
+	if not _is_at_staging_cell():
+		return
+
+	var staging_cell: Vector2i = _traversal_plan.get("staging_cell", Vector2i(-1, -1))
+	global_position = _cell_center(staging_cell)
+	velocity = Vector2.ZERO
+	_dig_head_cell = staging_cell
+	_dig_direction = _traversal_plan.get("dig_direction", Vector2i.RIGHT)
+	_current_dig_cell = _traversal_plan.get("first_frontier_cell", Vector2i(-1, -1))
+	_dig_progress = 0.0
+	_intent = Intent.DIG_BLOCK
+	_current_action = "dig"
+
+func _choose_next_dig_cell() -> Vector2i:
+	var head_cell := _dig_head_cell
+	if head_cell.x < 0:
+		head_cell = _traversal_plan.get("staging_cell", Vector2i(-1, -1))
+	if head_cell.x < 0:
+		return Vector2i(-1, -1)
+
+	var best_cell := Vector2i(-1, -1)
+	var best_alignment := -INF
+	for direction in CARDINAL_DIRS:
+		var candidate: Vector2i = head_cell + direction
+		if not world.is_frontier_earth_block(candidate):
+			continue
+		var alignment := float(direction.x * _dig_direction.x + direction.y * _dig_direction.y)
+		if alignment > best_alignment:
+			best_alignment = alignment
+			best_cell = candidate
+			continue
+		if is_equal_approx(alignment, best_alignment) and _is_cell_before(candidate, best_cell):
+			best_cell = candidate
+	return best_cell
+
+func _has_broken_through() -> bool:
+	var origin_region_lookup: Dictionary = _traversal_plan.get("origin_region_lookup", {})
+	for direction in CARDINAL_DIRS:
+		var neighbor: Vector2i = _dig_head_cell + direction
+		if not world.is_in_bounds(neighbor.x, neighbor.y):
+			continue
+		if world.get_material(neighbor.x, neighbor.y) != MaterialType.Id.EMPTY:
+			continue
+		if origin_region_lookup.has(neighbor):
+			continue
+		return true
+	return false
+
+func _snapshot_frontier_clusters() -> Array[Dictionary]:
+	var clusters: Array[Dictionary] = []
+	var clusters_variant = _current_snapshot.get("frontier_clusters", [])
+	for cluster in clusters_variant:
+		clusters.append(cluster)
+	return clusters
+
+func _cluster_frontier_cells(cluster: Dictionary) -> Array[Vector2i]:
+	var frontier_cells: Array[Vector2i] = []
+	var cells_variant = cluster.get("frontier_cells", [])
+	for cell in cells_variant:
+		frontier_cells.append(cell)
+	return frontier_cells
+
+func _cluster_staging_cells(cluster: Dictionary) -> Array[Vector2i]:
+	var staging_cells: Array[Vector2i] = []
+	var cells_variant = cluster.get("staging_cells", [])
+	for cell in cells_variant:
+		staging_cells.append(cell)
+	return staging_cells
+
+func _plan_path_cells() -> Array[Vector2i]:
+	var path_cells: Array[Vector2i] = []
+	var path_variant = _traversal_plan.get("path_cells", [])
+	for cell in path_variant:
+		path_cells.append(cell)
+	return path_cells
+
+func _can_analyze_from_cell(cell: Vector2i) -> bool:
+	return world != null \
+		and world.is_in_bounds(cell.x, cell.y) \
+		and world.get_material(cell.x, cell.y) == MaterialType.Id.EMPTY
+
+func _is_empty_cell(cell: Vector2i) -> bool:
+	return world.is_in_bounds(cell.x, cell.y) and world.get_material(cell.x, cell.y) == MaterialType.Id.EMPTY
+
+func _are_cells_adjacent(a: Vector2i, b: Vector2i) -> bool:
+	return abs(a.x - b.x) + abs(a.y - b.y) == 1
+
+func _vector_to_cardinal(direction: Vector2) -> Vector2i:
+	if abs(direction.x) >= abs(direction.y):
+		return Vector2i(1 if direction.x >= 0.0 else -1, 0)
+	return Vector2i(0, 1 if direction.y >= 0.0 else -1)
+
+static func _is_cell_before(a: Vector2i, b: Vector2i) -> bool:
+	if b.x < 0 or b.y < 0:
+		return true
+	if a.y == b.y:
+		return a.x < b.x
+	return a.y < b.y
 
 func _move_along(direction: Vector2, delta: float) -> void:
 	if direction.length_squared() <= 0.0001:
@@ -475,62 +542,9 @@ func _best_open_direction(desired_dir: Vector2) -> Vector2:
 			best_dir = candidate_dir
 	return best_dir
 
-func _get_current_region(origin_cell: Vector2i) -> Dictionary:
-	if _region_revision == world.revision and _region_anchor == origin_cell and not _region_members.is_empty():
-		return _region_members
-	if _region_revision == world.revision and _region_members.has(origin_cell):
-		return _region_members
-
-	var bounds_radius := Config.CREATURE_PERCEPTION_RADIUS_CELLS + Config.CREATURE_REGION_MARGIN_CELLS
-	var min_x := maxi(0, origin_cell.x - bounds_radius)
-	var max_x := mini(world.width - 1, origin_cell.x + bounds_radius)
-	var min_y := maxi(0, origin_cell.y - bounds_radius)
-	var max_y := mini(world.height - 1, origin_cell.y + bounds_radius)
-
-	var visited: Dictionary = {}
-	var members: Array[Vector2i] = []
-	if world.get_material(origin_cell.x, origin_cell.y) != MaterialType.Id.EMPTY:
-		_region_members = visited
-		_region_list = members
-		_region_anchor = origin_cell
-		_region_revision = world.revision
-		return visited
-
-	var queue: Array[Vector2i] = [origin_cell]
-	var queue_index := 0
-	visited[origin_cell] = true
-	members.append(origin_cell)
-
-	while queue_index < queue.size():
-		var cell: Vector2i = queue[queue_index]
-		queue_index += 1
-		for offset in CARDINAL_DIRS:
-			var next_cell: Vector2i = cell + offset
-			if next_cell.x < min_x or next_cell.x > max_x or next_cell.y < min_y or next_cell.y > max_y:
-				continue
-			if visited.has(next_cell):
-				continue
-			if world.get_material(next_cell.x, next_cell.y) != MaterialType.Id.EMPTY:
-				continue
-			visited[next_cell] = true
-			members.append(next_cell)
-			queue.append(next_cell)
-
-	_region_members = visited
-	_region_list = members
-	_region_anchor = origin_cell
-	_region_revision = world.revision
-	return visited
-
-func _invalidate_region_cache() -> void:
-	_region_revision = -1
-	_region_anchor = Vector2i(-1, -1)
-	_region_members.clear()
-	_region_list.clear()
-
 func _update_stuck_state(delta: float) -> void:
 	var moved_distance := global_position.distance_to(_last_position)
-	if moved_distance <= 0.05 and (_intent == Intent.SURVEY_CAVE or _intent == Intent.MOVE_TO_FRONTIER):
+	if moved_distance <= 0.05 and _intent == Intent.MOVE_TO_FRONTIER:
 		_stuck_timer += delta
 	else:
 		_stuck_timer = 0.0
@@ -568,10 +582,7 @@ func _passable(pos: Vector2) -> bool:
 	return true
 
 func _frontier_direction_vector() -> Vector2:
-	if _frontier_target.is_empty():
-		return Vector2.ZERO
-	var direction: Vector2i = _frontier_target.get("direction", Vector2i.ZERO)
-	return Vector2(float(direction.x), float(direction.y))
+	return Vector2(float(_dig_direction.x), float(_dig_direction.y))
 
 func _update_chain(delta: float) -> void:
 	_chain_pos[0] = global_position
@@ -659,8 +670,6 @@ func _intent_name(intent: int) -> String:
 	match intent:
 		Intent.WANDER:
 			return "wander"
-		Intent.SURVEY_CAVE:
-			return "survey_cave"
 		Intent.CHOOSE_FRONTIER:
 			return "choose_frontier"
 		Intent.MOVE_TO_FRONTIER:
