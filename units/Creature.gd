@@ -350,7 +350,7 @@ func _choose_best_traversal_plan_with_limit(
 	origin_cell: Vector2i,
 	max_path_cost: int
 ) -> Dictionary:
-	var planner_result := _planner_result(snapshot, reachability, origin_cell, max_path_cost)
+	var planner_result := _planner_result(snapshot, reachability, origin_cell, max_path_cost, true)
 	var selected_candidate: Dictionary = planner_result.get("selected_candidate", {})
 	if selected_candidate.is_empty():
 		return {}
@@ -360,10 +360,12 @@ func _planner_result(
 	snapshot: Dictionary,
 	reachability: Dictionary,
 	origin_cell: Vector2i,
-	max_path_cost: int
+	max_path_cost: int,
+	update_debug: bool = true
 ) -> Dictionary:
 	if _dig_planner == null:
-		_clear_frontier_debug_scores()
+		if update_debug:
+			_clear_frontier_debug_scores()
 		return {}
 	var planner_result := _dig_planner.choose_candidate(
 		snapshot,
@@ -375,7 +377,8 @@ func _planner_result(
 		_decision_rng,
 		max_path_cost
 	)
-	_update_frontier_debug_scores(planner_result)
+	if update_debug:
+		_update_frontier_debug_scores(planner_result)
 	return planner_result
 
 func _planner_reference_direction() -> Vector2i:
@@ -659,7 +662,7 @@ func _find_local_frontier_option(origin_cell: Vector2i, max_steps: int) -> Dicti
 	if snapshot.is_empty():
 		return {}
 	var reachability: Dictionary = _build_navigation_reachability(snapshot, origin_cell)
-	var planner_result := _planner_result(snapshot, reachability, origin_cell, max_steps)
+	var planner_result := _planner_result(snapshot, reachability, origin_cell, max_steps, false)
 	var selected_candidate: Dictionary = planner_result.get("selected_candidate", {})
 	if selected_candidate.is_empty():
 		return {}
@@ -765,11 +768,22 @@ func _choose_next_dig_cell() -> Vector2i:
 		head_cell = _traversal_plan.get("staging_cell", Vector2i(-1, -1))
 	if head_cell.x < 0:
 		return Vector2i(-1, -1)
+	var forward_candidate := _preferred_forward_dig_cell(head_cell)
+	if forward_candidate.x >= 0:
+		return forward_candidate
 	var option := _find_local_frontier_option(head_cell, 0)
 	if option.is_empty():
 		return Vector2i(-1, -1)
 	_commit_local_frontier_option(option)
 	return option.get("frontier_cell", Vector2i(-1, -1))
+
+func _preferred_forward_dig_cell(head_cell: Vector2i) -> Vector2i:
+	if _dig_direction == Vector2i.ZERO:
+		return Vector2i(-1, -1)
+	var candidate := head_cell + _dig_direction
+	if world.is_frontier_earth_block(candidate):
+		return candidate
+	return Vector2i(-1, -1)
 
 func _has_broken_through() -> bool:
 	var origin_region_lookup: Dictionary = _traversal_plan.get("origin_region_lookup", {})
