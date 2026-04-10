@@ -47,6 +47,8 @@ func _build_debug_text(cell: Vector2i) -> String:
 		var creature_debug := unit_manager.debug_snapshot()
 		if not creature_debug.is_empty():
 			var target_cell: Vector2i = creature_debug.get("target_cell", Vector2i(-1, -1))
+			var frontier_cell: Vector2i = creature_debug.get("frontier_cell", Vector2i(-1, -1))
+			var dig_cell: Vector2i = creature_debug.get("dig_cell", Vector2i(-1, -1))
 			var target_dir: Vector2 = creature_debug.get("target_direction", Vector2.ZERO)
 			lines.append(
 				"Creature: %s / %s" % [
@@ -54,12 +56,25 @@ func _build_debug_text(cell: Vector2i) -> String:
 					str(creature_debug.get("action", "idle")),
 				]
 			)
+			lines.append("Cave scanned: %s (%s)" % [
+				str(creature_debug.get("cave_scanned", false)),
+				str(creature_debug.get("survey_progress", "0/0")),
+			])
 			lines.append(
-				"Target: cell=(%d,%d) dir=(%.2f, %.2f)" % [
+				"Target: cell=(%d,%d) frontier=(%d,%d)" % [
 					target_cell.x,
 					target_cell.y,
+					frontier_cell.x,
+					frontier_cell.y,
+				]
+			)
+			lines.append(
+				"Dir: (%.2f, %.2f) dig=(%d,%d) %.2fs" % [
 					target_dir.x,
 					target_dir.y,
+					dig_cell.x,
+					dig_cell.y,
+					float(creature_debug.get("dig_progress", 0.0)),
 				]
 			)
 			lines.append("Replan in: %.2fs" % float(creature_debug.get("replan_in", 0.0)))

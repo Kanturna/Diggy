@@ -145,6 +145,27 @@ func carve_earth_cells(cells: Array[Vector2i]) -> int:
 		carved += 1
 	return carved
 
+func carve_earth_cell(cell: Vector2i) -> bool:
+	if not is_in_bounds(cell.x, cell.y):
+		return false
+	if get_material(cell.x, cell.y) != MaterialType.Id.EARTH:
+		return false
+	set_material(cell.x, cell.y, MaterialType.Id.EMPTY)
+	return true
+
+func is_frontier_earth_block(cell: Vector2i) -> bool:
+	if not is_in_bounds(cell.x, cell.y):
+		return false
+	if get_material(cell.x, cell.y) != MaterialType.Id.EARTH:
+		return false
+	for offset in [Vector2i.LEFT, Vector2i.RIGHT, Vector2i.UP, Vector2i.DOWN]:
+		var neighbor := cell + offset
+		if not is_in_bounds(neighbor.x, neighbor.y):
+			continue
+		if get_material(neighbor.x, neighbor.y) == MaterialType.Id.EMPTY:
+			return true
+	return false
+
 func _default_flags_for_material(material: int) -> int:
 	if material == MaterialType.Id.EARTH:
 		return CellFlags.Id.BLOCKING | CellFlags.Id.DIGGABLE
