@@ -47,6 +47,8 @@ const CARDINAL_DIRS: Array[Vector2i] = [
 	Vector2i.LEFT,
 	Vector2i.UP,
 ]
+const LOCAL_FRONTIER_SEARCH_STEPS := 3
+const LOCAL_DIG_CONTINUE_STEPS := 1
 
 enum Intent {
 	WANDER,
@@ -220,6 +222,8 @@ func _tick_move_to_frontier(delta: float) -> void:
 	if move_dir == Vector2.ZERO:
 		if _try_entry_fallback_dig():
 			return
+		if _try_local_frontier_dig_from_position():
+			return
 		velocity = Vector2.ZERO
 		return
 
@@ -250,6 +254,8 @@ func _tick_dig_block(delta: float) -> void:
 		_current_dig_cell = _choose_next_dig_cell()
 		_dig_progress = 0.0
 		if _current_dig_cell.x < 0:
+			if _try_continue_local_dig():
+				return
 			_request_frontier_plan("dig_no_frontier")
 			return
 
@@ -257,6 +263,8 @@ func _tick_dig_block(delta: float) -> void:
 		_current_dig_cell = _choose_next_dig_cell()
 		_dig_progress = 0.0
 		if _current_dig_cell.x < 0:
+			if _try_continue_local_dig():
+				return
 			_request_frontier_plan("dig_invalid_frontier")
 			return
 
@@ -664,6 +672,157 @@ func _try_entry_fallback_dig() -> bool:
 	_enter_dig_state(current_cell, entry_cell)
 	return _intent == Intent.DIG_BLOCK
 
+func _try_local_frontier_dig_from_position() -> bool:
+	var option := _find_local_frontier_option(_world_to_cell(global_position), LOCAL_FRONTIER_SEARCH_STEPS)
+	if option.is_empty():
+		return false
+	_commit_local_frontier_option(option)
+	_enter_dig_state(
+		option.get("head_cell", Vector2i(-1, -1)),
+		option.get("frontier_cell", Vector2i(-1, -1))
+	)
+	return _intent == Intent.DIG_BLOCK
+
+func _try_continue_local_dig() -> bool:
+	var origin_cell := _dig_head_cell if _dig_head_cell.x >= 0 else _world_to_cell(global_position)
+	var option := _find_local_frontier_option(origin_cell, LOCAL_DIG_CONTINUE_STEPS)
+	if option.is_empty():
+		return false
+	_commit_local_frontier_option(option)
+	_adopt_local_dig_option(option)
+	return _current_dig_cell.x >= 0
+
+func _find_local_frontier_option(origin_cell: Vector2i, max_steps: int) -> Dictionary:
+	if cave_analysis == null or not _can_analyze_from_cell(origin_cell):
+		return {}
+
+	var snapshot: Dictionary = cave_analysis.get_region_snapshot(origin_cell)
+	if snapshot.is_empty():
+		return {}
+
+	var selected_cluster_id := str(_traversal_plan.get("cluster_id", ""))
+	var cluster_by_frontier: Dictionary = {}
+	var selected_frontier_lookup: Dictionary = {}
+	for cluster in _snapshot_frontier_clusters_from(snapshot):
+		var cluster_id := str(cluster.get("cluster_id", ""))
+		var frontier_lookup: Dictionary = cluster.get("frontier_lookup", {})
+		if cluster_id == selected_cluster_id:
+			selected_frontier_lookup = frontier_lookup
+		for frontier_cell_variant in frontier_lookup.keys():
+			var frontier_cell: Vector2i = frontier_cell_variant
+			cluster_by_frontier[frontier_cell] = cluster_id
+
+	var region_lookup: Dictionary = snapshot.get("region_lookup", {})
+	if not region_lookup.has(origin_cell) or not _is_navigable_cell(origin_cell):
+		return {}
+
+	var distance: Dictionary = {origin_cell: 0}
+	var queue: Array[Vector2i] = [origin_cell]
+	var queue_index := 0
+	var best_selected: Dictionary = {}
+	var best_fallback: Dictionary = {}
+
+	while queue_index < queue.size():
+		var head_cell: Vector2i = queue[queue_index]
+		queue_index += 1
+		var steps := int(distance.get(head_cell, 0))
+		if steps > max_steps:
+			continue
+
+		for direction in CARDINAL_DIRS:
+			var frontier_cell: Vector2i = head_cell + direction
+			if not world.is_frontier_earth_block(frontier_cell):
+				continue
+			var candidate := {
+				"snapshot": snapshot,
+				"head_cell": head_cell,
+				"frontier_cell": frontier_cell,
+				"cluster_id": str(cluster_by_frontier.get(frontier_cell, "")),
+				"steps": steps,
+				"alignment": float(direction.x * _dig_direction.x + direction.y * _dig_direction.y),
+			}
+			if selected_frontier_lookup.has(frontier_cell):
+				if _is_better_local_frontier_option(candidate, best_selected):
+					best_selected = candidate
+			elif _is_better_local_frontier_option(candidate, best_fallback):
+				best_fallback = candidate
+
+		if steps >= max_steps:
+			continue
+		for direction in CARDINAL_DIRS:
+			var next_cell: Vector2i = head_cell + direction
+			if not region_lookup.has(next_cell):
+				continue
+			if distance.has(next_cell):
+				continue
+			if not _is_navigable_cell(next_cell):
+				continue
+			distance[next_cell] = steps + 1
+			queue.append(next_cell)
+
+	if not best_selected.is_empty():
+		return best_selected
+	return best_fallback
+
+func _is_better_local_frontier_option(candidate: Dictionary, incumbent: Dictionary) -> bool:
+	if incumbent.is_empty():
+		return true
+
+	var candidate_steps := int(candidate.get("steps", 999999))
+	var incumbent_steps := int(incumbent.get("steps", 999999))
+	if candidate_steps != incumbent_steps:
+		return candidate_steps < incumbent_steps
+
+	var candidate_alignment := float(candidate.get("alignment", -INF))
+	var incumbent_alignment := float(incumbent.get("alignment", -INF))
+	if not is_equal_approx(candidate_alignment, incumbent_alignment):
+		return candidate_alignment > incumbent_alignment
+
+	var candidate_frontier: Vector2i = candidate.get("frontier_cell", Vector2i(-1, -1))
+	var incumbent_frontier: Vector2i = incumbent.get("frontier_cell", Vector2i(-1, -1))
+	return _is_cell_before(candidate_frontier, incumbent_frontier)
+
+func _commit_local_frontier_option(option: Dictionary) -> void:
+	var snapshot: Dictionary = option.get("snapshot", {})
+	if not snapshot.is_empty():
+		_current_snapshot = snapshot
+		_traversal_plan["revision"] = snapshot.get("revision", world.revision)
+		_traversal_plan["region_id_anchor"] = snapshot.get("region_id_anchor", Vector2i(-1, -1))
+		_traversal_plan["origin_region_lookup"] = snapshot.get("region_lookup", {})
+	var head_cell: Vector2i = option.get("head_cell", Vector2i(-1, -1))
+	var frontier_cell: Vector2i = option.get("frontier_cell", Vector2i(-1, -1))
+	if head_cell.x >= 0:
+		_traversal_plan["staging_cell"] = head_cell
+		_move_target_cell = head_cell
+		_traversal_plan["path_cells"] = [head_cell]
+		_traversal_plan["path_index"] = 0
+		_current_path_index = 0
+	if frontier_cell.x >= 0:
+		_traversal_plan["first_frontier_cell"] = frontier_cell
+		var dig_direction: Vector2i = frontier_cell - head_cell
+		if dig_direction != Vector2i.ZERO:
+			_traversal_plan["dig_direction"] = dig_direction
+	var cluster_id := str(option.get("cluster_id", ""))
+	if not cluster_id.is_empty():
+		_traversal_plan["cluster_id"] = cluster_id
+
+func _adopt_local_dig_option(option: Dictionary) -> void:
+	var head_cell: Vector2i = option.get("head_cell", Vector2i(-1, -1))
+	var frontier_cell: Vector2i = option.get("frontier_cell", Vector2i(-1, -1))
+	if head_cell.x < 0 or frontier_cell.x < 0:
+		return
+	_commit_local_frontier_option(option)
+	if head_cell != _dig_head_cell and _can_occupy_cell_center(head_cell):
+		global_position = _cell_center(head_cell)
+	_dig_head_cell = head_cell
+	var dig_direction: Vector2i = frontier_cell - head_cell
+	if dig_direction != Vector2i.ZERO:
+		_dig_direction = dig_direction
+	_current_dig_cell = frontier_cell
+	_dig_progress = 0.0
+	_dig_advancing = false
+	_current_action = "dig"
+
 func _enter_dig_state(dig_head_cell: Vector2i, dig_cell: Vector2i) -> void:
 	if dig_head_cell.x < 0 or dig_cell.x < 0:
 		_request_frontier_plan("dig_head_invalid")
@@ -729,12 +888,15 @@ func _has_broken_through() -> bool:
 		return true
 	return false
 
-func _snapshot_frontier_clusters() -> Array[Dictionary]:
+func _snapshot_frontier_clusters_from(snapshot: Dictionary) -> Array[Dictionary]:
 	var clusters: Array[Dictionary] = []
-	var clusters_variant = _current_snapshot.get("frontier_clusters", [])
+	var clusters_variant = snapshot.get("frontier_clusters", [])
 	for cluster in clusters_variant:
 		clusters.append(cluster)
 	return clusters
+
+func _snapshot_frontier_clusters() -> Array[Dictionary]:
+	return _snapshot_frontier_clusters_from(_current_snapshot)
 
 func _cluster_frontier_cells(cluster: Dictionary) -> Array[Vector2i]:
 	var frontier_cells: Array[Vector2i] = []
