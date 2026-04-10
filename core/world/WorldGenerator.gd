@@ -15,61 +15,71 @@ func generate(world: WorldModel) -> void:
 	world.end_bulk_update()
 
 func _fill_with_earth(world: WorldModel) -> void:
-	for y in world.height:
-		for x in world.width:
-			world.set_cell(
-				x,
-				y,
-				MaterialType.Id.EARTH,
-				0,
-				CellFlags.Id.BLOCKING | CellFlags.Id.DIGGABLE
-			)
+	var total_cells := world.width * world.height
+	world.materials.fill(MaterialType.Id.EARTH)
+	world.variants.fill(0)
+	for i in total_cells:
+		world.flags[i] = CellFlags.Id.BLOCKING | CellFlags.Id.DIGGABLE
 
 func _carve_noise_caves(world: WorldModel) -> void:
 	var noise := FastNoiseLite.new()
 	noise.seed = world.seed
 	noise.frequency = Config.CAVE_NOISE_FREQUENCY
+	var width := world.width
+	var materials := world.materials
+	var variants := world.variants
+	var flags := world.flags
 
 	for y in world.height:
 		for x in world.width:
 			var n := (noise.get_noise_2d(x, y) + 1.0) * 0.5
 			if n < Config.CAVE_EMPTY_THRESHOLD:
-				world.set_cell(x, y, MaterialType.Id.EMPTY, 0, CellFlags.Id.NONE)
+				var idx := y * width + x
+				materials[idx] = MaterialType.Id.EMPTY
+				variants[idx] = 0
+				flags[idx] = CellFlags.Id.NONE
 
 func _smooth_pass(world: WorldModel) -> void:
+	var width := world.width
+	var height := world.height
+	var current_materials := world.materials
 	var next_materials := PackedByteArray()
-	next_materials.resize(world.width * world.height)
+	next_materials.resize(width * height)
 
-	for y in world.height:
-		for x in world.width:
-			var solid_neighbors := _count_earth_neighbors(world, x, y)
-			var idx := world.index_of(x, y)
-			var current := world.materials[idx]
+	for y in height:
+		var row_offset := y * width
+		for x in width:
+			var idx := row_offset + x
+			var solid_neighbors := _count_earth_neighbors(current_materials, width, height, x, y)
+			var current := current_materials[idx]
 			if solid_neighbors >= 5:
 				next_materials[idx] = MaterialType.Id.EARTH
+			elif current == MaterialType.Id.EMPTY:
+				next_materials[idx] = MaterialType.Id.EMPTY
 			else:
-				next_materials[idx] = MaterialType.Id.EMPTY if current == MaterialType.Id.EMPTY else current
+				next_materials[idx] = current
 
-	for y in world.height:
-		for x in world.width:
-			var idx := world.index_of(x, y)
-			if next_materials[idx] == MaterialType.Id.EARTH:
-				world.set_cell(x, y, MaterialType.Id.EARTH, world.variants[idx], CellFlags.Id.BLOCKING | CellFlags.Id.DIGGABLE)
-			else:
-				world.set_cell(x, y, MaterialType.Id.EMPTY, 0, CellFlags.Id.NONE)
+	for i in next_materials.size():
+		if next_materials[i] == MaterialType.Id.EARTH:
+			world.materials[i] = MaterialType.Id.EARTH
+			world.flags[i] = CellFlags.Id.BLOCKING | CellFlags.Id.DIGGABLE
+		else:
+			world.materials[i] = MaterialType.Id.EMPTY
+			world.variants[i] = 0
+			world.flags[i] = CellFlags.Id.NONE
 
-func _count_earth_neighbors(world: WorldModel, x: int, y: int) -> int:
+func _count_earth_neighbors(materials: PackedByteArray, width: int, height: int, x: int, y: int) -> int:
 	var count := 0
 	for oy in range(-1, 2):
+		var ny := y + oy
 		for ox in range(-1, 2):
 			if ox == 0 and oy == 0:
 				continue
 			var nx := x + ox
-			var ny := y + oy
-			if not world.is_in_bounds(nx, ny):
+			if nx < 0 or ny < 0 or nx >= width or ny >= height:
 				count += 1
 				continue
-			if world.get_material(nx, ny) == MaterialType.Id.EARTH:
+			if materials[ny * width + nx] == MaterialType.Id.EARTH:
 				count += 1
 	return count
 
@@ -81,14 +91,17 @@ func _apply_variants(world: WorldModel) -> void:
 	var detail_noise := FastNoiseLite.new()
 	detail_noise.seed = world.seed + 4271
 	detail_noise.frequency = Config.CAVE_NOISE_FREQUENCY * 2.4
+	var width := world.width
+	var materials := world.materials
+	var variants := world.variants
 
 	for y in world.height:
 		for x in world.width:
-			var idx := world.index_of(x, y)
-			if world.materials[idx] != MaterialType.Id.EARTH:
-				world.variants[idx] = 0
+			var idx := y * width + x
+			if materials[idx] != MaterialType.Id.EARTH:
+				variants[idx] = 0
 				continue
 			var base_sample := (base_noise.get_noise_2d(x, y) + 1.0) * 0.5
 			var detail_sample := (detail_noise.get_noise_2d(x, y) + 1.0) * 0.5
 			var sample := base_sample * 0.82 + detail_sample * 0.18
-			world.variants[idx] = clampi(int(floor(sample * 6.0)), 0, 5)
+			variants[idx] = clampi(int(floor(sample * 6.0)), 0, 5)
