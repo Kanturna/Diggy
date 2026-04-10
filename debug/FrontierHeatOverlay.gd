@@ -2,34 +2,45 @@ extends Node2D
 class_name FrontierHeatOverlay
 
 const Config = preload("res://core/Config.gd")
+const HEATMAP_REDRAW_INTERVAL := 0.15
 
 var unit_manager: UnitManager = null
 var show_heatmap := false
+var _redraw_accum := 0.0
+var _snapshot_cache: Dictionary = {}
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	if Input.is_action_just_pressed(Config.FRONTIER_DEBUG_TOGGLE_ACTION):
 		show_heatmap = not show_heatmap
 		visible = show_heatmap
+		_redraw_accum = HEATMAP_REDRAW_INTERVAL
+		if show_heatmap and unit_manager != null:
+			_snapshot_cache = unit_manager.frontier_debug_snapshot()
 		queue_redraw()
 
 	if not show_heatmap:
 		return
+	_redraw_accum += delta
+	if _redraw_accum < HEATMAP_REDRAW_INTERVAL:
+		return
+	_redraw_accum = 0.0
+	if unit_manager != null:
+		_snapshot_cache = unit_manager.frontier_debug_snapshot()
 	queue_redraw()
 
 func _draw() -> void:
 	if not show_heatmap or unit_manager == null:
 		return
 
-	var snapshot: Dictionary = unit_manager.frontier_debug_snapshot()
-	var entries_variant = snapshot.get("entries", [])
+	var entries_variant = _snapshot_cache.get("entries", [])
 	if entries_variant.is_empty():
 		return
 
-	var min_score := float(snapshot.get("min_score", 0.0))
-	var max_score := float(snapshot.get("max_score", 1.0))
+	var min_score := float(_snapshot_cache.get("min_score", 0.0))
+	var max_score := float(_snapshot_cache.get("max_score", 1.0))
 	var score_span := maxf(max_score - min_score, 0.001)
 	var selected_cells_lookup: Dictionary = {}
-	var selected_cells_variant = snapshot.get("selected_cells", [])
+	var selected_cells_variant = _snapshot_cache.get("selected_cells", [])
 	for selected_cell_variant in selected_cells_variant:
 		var selected_cell: Vector2i = selected_cell_variant
 		selected_cells_lookup[selected_cell] = true
