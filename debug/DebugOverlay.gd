@@ -11,6 +11,7 @@ var renderer: WorldMaterialRenderer
 var unit_manager: UnitManager = null
 var is_visible_overlay := true
 var startup_timings := {}
+var creature_count := 0
 
 func setup(world_model: WorldModel, world_renderer: WorldMaterialRenderer) -> void:
 	world = world_model
@@ -19,6 +20,9 @@ func setup(world_model: WorldModel, world_renderer: WorldMaterialRenderer) -> vo
 
 func set_startup_timings(timings: Dictionary) -> void:
 	startup_timings = timings.duplicate()
+
+func set_creature_count(count: int) -> void:
+	creature_count = count
 
 func _process(_delta: float) -> void:
 	if Input.is_action_just_pressed(Config.DEBUG_TOGGLE_ACTION):
@@ -65,6 +69,7 @@ func _build_debug_text(cell: Vector2i) -> String:
 				int(startup_timings.get("world_generate_variants_ms", 0)),
 			]
 		)
+	lines.append("Creatures: %d" % creature_count)
 	if camera != null:
 		var zoom_levels := Config.CAMERA_ZOOM_LEVELS
 		var zoom_level_index := zoom_levels.find(camera.zoom.x)
