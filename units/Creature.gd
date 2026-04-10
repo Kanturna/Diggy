@@ -175,15 +175,15 @@ func _tick_choose_frontier() -> void:
 		_set_random_wander_target("choose_invalid_origin")
 		return
 
-	var snapshot := cave_analysis.get_region_snapshot(origin_cell)
+	var snapshot: Dictionary = cave_analysis.get_region_snapshot(origin_cell)
 	if snapshot.is_empty():
 		_clear_frontier_debug_scores()
 		_set_random_wander_target("choose_no_snapshot")
 		return
 
 	_current_snapshot = snapshot
-	var reachability := cave_analysis.build_reachability(snapshot, origin_cell)
-	var traversal_plan := _choose_best_traversal_plan(snapshot, reachability, origin_cell)
+	var reachability: Dictionary = _build_navigation_reachability(snapshot, origin_cell)
+	var traversal_plan: Dictionary = _choose_best_traversal_plan(snapshot, reachability, origin_cell)
 	if traversal_plan.is_empty():
 		_set_random_wander_target("choose_no_reachable_frontier")
 		return
@@ -215,6 +215,9 @@ func _tick_move_to_frontier(delta: float) -> void:
 
 	var move_dir: Vector2 = _best_open_direction((_cell_center(_move_target_cell) - global_position).normalized())
 	if move_dir == Vector2.ZERO:
+		if _can_begin_dig_from_current_position():
+			_start_dig_from_current_plan()
+			return
 		velocity = Vector2.ZERO
 		return
 
@@ -311,7 +314,8 @@ func _choose_best_traversal_plan(snapshot: Dictionary, reachability: Dictionary,
 				continue
 			if _is_better_traversal_candidate(candidate, best_plan):
 				best_plan = candidate
-	_update_frontier_debug_scores(frontier_scores, best_plan if not best_plan.is_empty() else best_zero_step_plan)
+	var selected_plan: Dictionary = best_plan if not best_plan.is_empty() else best_zero_step_plan
+	_update_frontier_debug_scores(frontier_scores, selected_plan)
 	if not best_plan.is_empty():
 		return best_plan
 	return best_zero_step_plan
@@ -405,7 +409,6 @@ func _prospect_frontier_score(frontier_cell: Vector2i, dig_direction: Vector2i, 
 			total_score += distance_weight * lateral_weight
 			if lateral == 0:
 				total_score += 0.35 * distance_weight
-	}
 	return total_score
 
 func _record_frontier_score(frontier_scores: Dictionary, candidate: Dictionary) -> void:
@@ -456,6 +459,39 @@ func _clear_frontier_debug_scores() -> void:
 	_frontier_debug_min_score = 0.0
 	_frontier_debug_max_score = 1.0
 
+func _build_navigation_reachability(snapshot: Dictionary, start_cell: Vector2i) -> Dictionary:
+	var reachability: Dictionary = {
+		"distance": {},
+		"came_from": {},
+	}
+	var region_lookup: Dictionary = snapshot.get("region_lookup", {})
+	if not region_lookup.has(start_cell):
+		return reachability
+	if not _is_navigable_cell(start_cell):
+		return reachability
+
+	var distance: Dictionary = reachability["distance"]
+	var came_from: Dictionary = reachability["came_from"]
+	var queue: Array[Vector2i] = [start_cell]
+	var queue_index := 0
+	distance[start_cell] = 0
+
+	while queue_index < queue.size():
+		var cell: Vector2i = queue[queue_index]
+		queue_index += 1
+		for direction in CARDINAL_DIRS:
+			var next_cell: Vector2i = cell + direction
+			if not region_lookup.has(next_cell):
+				continue
+			if distance.has(next_cell):
+				continue
+			if not _is_navigable_cell(next_cell):
+				continue
+			distance[next_cell] = int(distance[cell]) + 1
+			came_from[next_cell] = cell
+			queue.append(next_cell)
+	return reachability
+
 func _adopt_traversal_plan(traversal_plan: Dictionary) -> void:
 	_traversal_plan = traversal_plan
 	_current_path_index = int(traversal_plan.get("path_index", 0))
@@ -497,7 +533,7 @@ func _move_replan_reason() -> String:
 		return "stuck"
 
 	var staging_cell: Vector2i = _traversal_plan.get("staging_cell", Vector2i(-1, -1))
-	if not _is_empty_cell(staging_cell):
+	if not _is_navigable_cell(staging_cell):
 		return "staging_invalid"
 
 	var path_cells := _plan_path_cells()
@@ -505,7 +541,7 @@ func _move_replan_reason() -> String:
 		return "path_empty"
 
 	for i in range(_current_path_index, path_cells.size()):
-		if not _is_empty_cell(path_cells[i]):
+		if not _is_navigable_cell(path_cells[i]):
 			return "path_invalid"
 	return ""
 
@@ -521,19 +557,80 @@ func _is_at_staging_cell() -> bool:
 	var staging_cell: Vector2i = _traversal_plan.get("staging_cell", Vector2i(-1, -1))
 	if staging_cell.x < 0:
 		return false
+	if _world_to_cell(global_position) == staging_cell:
+		return true
 	return _distance_to_cell(staging_cell) <= Config.CREATURE_STAGING_REACHED_CELLS
+
+func _can_begin_dig_from_current_position() -> bool:
+	if _traversal_plan.is_empty():
+		return false
+	var frontier_cell: Vector2i = _traversal_plan.get("first_frontier_cell", Vector2i(-1, -1))
+	if frontier_cell.x < 0:
+		return false
+	if not world.is_frontier_earth_block(frontier_cell):
+		return false
+
+	var current_cell := _world_to_cell(global_position)
+	if _is_empty_cell(current_cell) and _are_cells_adjacent(current_cell, frontier_cell):
+		return true
+
+	var staging_cell: Vector2i = _traversal_plan.get("staging_cell", Vector2i(-1, -1))
+	if staging_cell.x < 0:
+		return false
+	if _distance_to_cell(staging_cell) > maxf(Config.CREATURE_STAGING_REACHED_CELLS, 0.8):
+		return false
+	return _is_empty_cell(current_cell) and _are_cells_adjacent(current_cell, frontier_cell)
+
+func _effective_dig_head_cell() -> Vector2i:
+	if _traversal_plan.is_empty():
+		return Vector2i(-1, -1)
+
+	var frontier_cell: Vector2i = _traversal_plan.get("first_frontier_cell", Vector2i(-1, -1))
+	var current_cell := _world_to_cell(global_position)
+	if frontier_cell.x >= 0 and _is_empty_cell(current_cell) and _are_cells_adjacent(current_cell, frontier_cell):
+		return current_cell
+
+	var staging_cell: Vector2i = _traversal_plan.get("staging_cell", Vector2i(-1, -1))
+	if staging_cell.x >= 0 and _is_empty_cell(staging_cell):
+		return staging_cell
+
+	if frontier_cell.x < 0:
+		return Vector2i(-1, -1)
+
+	var origin_region_lookup: Dictionary = _traversal_plan.get("origin_region_lookup", {})
+	var best_cell := Vector2i(-1, -1)
+	var best_distance := INF
+	for direction in CARDINAL_DIRS:
+		var candidate: Vector2i = frontier_cell + direction
+		if not _is_empty_cell(candidate):
+			continue
+		if not origin_region_lookup.is_empty() and not origin_region_lookup.has(candidate):
+			continue
+		var candidate_distance := _cell_center(candidate).distance_to(global_position)
+		if candidate_distance < best_distance:
+			best_distance = candidate_distance
+			best_cell = candidate
+	return best_cell
 
 func _start_dig_from_current_plan() -> void:
 	if _traversal_plan.is_empty():
 		_request_frontier_plan("dig_missing_plan")
 		return
-	if not _is_at_staging_cell():
+	if not _is_at_staging_cell() and not _can_begin_dig_from_current_position():
 		return
 
-	var staging_cell: Vector2i = _traversal_plan.get("staging_cell", Vector2i(-1, -1))
-	global_position = _cell_center(staging_cell)
+	var dig_head_cell := _effective_dig_head_cell()
+	if dig_head_cell.x < 0:
+		_request_frontier_plan("dig_missing_staging")
+		return
+	if _world_to_cell(global_position) != dig_head_cell:
+		global_position = _cell_center(dig_head_cell)
+	else:
+		var centered_position := _cell_center(dig_head_cell)
+		if can_occupy_world(world, centered_position):
+			global_position = centered_position
 	velocity = Vector2.ZERO
-	_dig_head_cell = staging_cell
+	_dig_head_cell = dig_head_cell
 	_dig_direction = _traversal_plan.get("dig_direction", Vector2i.RIGHT)
 	_current_dig_cell = _traversal_plan.get("first_frontier_cell", Vector2i(-1, -1))
 	_dig_progress = 0.0
@@ -611,6 +708,11 @@ func _can_analyze_from_cell(cell: Vector2i) -> bool:
 func _is_empty_cell(cell: Vector2i) -> bool:
 	return world.is_in_bounds(cell.x, cell.y) and world.get_material(cell.x, cell.y) == MaterialType.Id.EMPTY
 
+func _is_navigable_cell(cell: Vector2i) -> bool:
+	if not _is_empty_cell(cell):
+		return false
+	return can_occupy_world(world, _cell_center(cell))
+
 func _are_cells_adjacent(a: Vector2i, b: Vector2i) -> bool:
 	return abs(a.x - b.x) + abs(a.y - b.y) == 1
 
@@ -677,8 +779,11 @@ func _world_to_cell(pos: Vector2) -> Vector2i:
 	)
 
 func _passable(pos: Vector2) -> bool:
-	if world == null:
-		return true
+	return can_occupy_world(world, pos)
+
+static func can_occupy_world(world_model: WorldModel, pos: Vector2) -> bool:
+	if world_model == null:
+		return false
 	var r := LOWER_R
 	var x0 := int(floor((pos.x - r) / Config.CELL_SIZE))
 	var x1 := int(floor((pos.x + r) / Config.CELL_SIZE))
@@ -686,9 +791,9 @@ func _passable(pos: Vector2) -> bool:
 	var y1 := int(floor((pos.y + r) / Config.CELL_SIZE))
 	for cy in range(y0, y1 + 1):
 		for cx in range(x0, x1 + 1):
-			if not world.is_in_bounds(cx, cy):
+			if not world_model.is_in_bounds(cx, cy):
 				return false
-			if world.get_material(cx, cy) != MaterialType.Id.EMPTY:
+			if world_model.get_material(cx, cy) != MaterialType.Id.EMPTY:
 				return false
 	return true
 

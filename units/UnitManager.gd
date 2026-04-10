@@ -42,6 +42,12 @@ func _spawn(world: WorldModel) -> void:
 func _spawn_snapshot_for_cell(world: WorldModel, cell: Vector2i) -> Dictionary:
 	if world.get_material(cell.x, cell.y) != MaterialType.Id.EMPTY:
 		return {}
+	var spawn_world_pos := Vector2(
+		(cell.x + 0.5) * Config.CELL_SIZE,
+		(cell.y + 0.5) * Config.CELL_SIZE
+	)
+	if not CreatureGD.can_occupy_world(world, spawn_world_pos):
+		return {}
 	if not _is_far_enough_from_existing_creatures(cell):
 		return {}
 
@@ -87,4 +93,33 @@ func debug_snapshot() -> Dictionary:
 func frontier_debug_snapshot() -> Dictionary:
 	if _creatures.is_empty():
 		return {}
-	return _creatures[0].get_frontier_debug_snapshot()
+	var entries_by_cell: Dictionary = {}
+	var selected_lookup: Dictionary = {}
+	var min_score := INF
+	var max_score := -INF
+	for creature in _creatures:
+		var snapshot: Dictionary = creature.get_frontier_debug_snapshot()
+		var entries_variant = snapshot.get("entries", [])
+		for entry_variant in entries_variant:
+			var entry: Dictionary = entry_variant
+			var cell: Vector2i = entry.get("cell", Vector2i(-1, -1))
+			var score := float(entry.get("score", 0.0))
+			if not entries_by_cell.has(cell) or score > float(entries_by_cell[cell].get("score", -INF)):
+				entries_by_cell[cell] = entry
+			min_score = minf(min_score, score)
+			max_score = maxf(max_score, score)
+		var selected_cell: Vector2i = snapshot.get("selected_frontier_cell", Vector2i(-1, -1))
+		if selected_cell.x >= 0:
+			selected_lookup[selected_cell] = true
+
+	var entries: Array[Dictionary] = []
+	for entry in entries_by_cell.values():
+		entries.append(entry)
+	if entries.is_empty():
+		return {}
+	return {
+		"entries": entries,
+		"min_score": min_score,
+		"max_score": max_score,
+		"selected_cells": selected_lookup.keys(),
+	}

@@ -28,7 +28,11 @@ func _draw() -> void:
 	var min_score := float(snapshot.get("min_score", 0.0))
 	var max_score := float(snapshot.get("max_score", 1.0))
 	var score_span := maxf(max_score - min_score, 0.001)
-	var selected_cell: Vector2i = snapshot.get("selected_frontier_cell", Vector2i(-1, -1))
+	var selected_cells_lookup: Dictionary = {}
+	var selected_cells_variant = snapshot.get("selected_cells", [])
+	for selected_cell_variant in selected_cells_variant:
+		var selected_cell: Vector2i = selected_cell_variant
+		selected_cells_lookup[selected_cell] = true
 	var cell_size := float(Config.CELL_SIZE)
 
 	for entry_variant in entries_variant:
@@ -42,7 +46,7 @@ func _draw() -> void:
 			Vector2.ONE * cell_size
 		)
 		draw_rect(rect, color)
-		if cell == selected_cell:
+		if selected_cells_lookup.has(cell):
 			draw_rect(rect.grow(1.0), Color(0.45, 0.95, 1.0, 0.95), false, 2.0)
 
 func _heat_color(t: float) -> Color:
