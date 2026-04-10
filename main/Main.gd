@@ -16,11 +16,11 @@ var debug_overlay: DebugOverlay
 func _ready() -> void:
 	_setup_input_map()
 	_setup_world_core()
+	_generate_world()
 	_setup_renderer()
 	_setup_camera()
 	_setup_debug()
 	_connect_signals()
-	_generate_world()
 
 func _process(_delta: float) -> void:
 	_on_chunks_dirtied()

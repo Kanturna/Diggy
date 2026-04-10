@@ -3,7 +3,7 @@ class_name Config
 
 const WORLD_WIDTH := 768
 const WORLD_HEIGHT := 576
-const CELL_SIZE := 2
+const CELL_SIZE := 3
 const CHUNK_SIZE := 32
 
 const DEFAULT_SEED := 1337
@@ -14,6 +14,7 @@ const CAVE_SMOOTH_PASSES := 2
 const CAMERA_BASE_SPEED := 550.0
 const CAMERA_SHIFT_MULTIPLIER := 2.2
 const CAMERA_ZOOM_LEVELS := [
+	0.03125,
 	0.0625,
 	0.125,
 	0.25,
@@ -21,7 +22,7 @@ const CAMERA_ZOOM_LEVELS := [
 	1.0,
 	2.0,
 ]
-const CAMERA_DEFAULT_ZOOM_INDEX := 4
+const CAMERA_DEFAULT_ZOOM_INDEX := 5
 
 const DEBUG_TOGGLE_ACTION := "debug_toggle"
 const MOVE_UP_ACTION := "camera_up"
