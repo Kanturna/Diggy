@@ -53,6 +53,7 @@ const DIG_REEVAL_BLOCK_INTERVAL := 3
 const LOCAL_ALIGNMENT_WEIGHT := 0.1
 const LOCAL_SELECTED_CLUSTER_BONUS := 0.45
 const FRONTIER_UTILITY_WEIGHT := 4.6
+const CLUSTER_CROWDING_PENALTY := 0.55
 
 enum Intent {
 	WANDER,
@@ -65,6 +66,7 @@ enum Intent {
 var velocity := Vector2.ZERO
 var world: WorldModel = null
 var cave_analysis: CaveRegionAnalysis = null
+var unit_manager: UnitManager = null
 
 var _chain_pos: Array[Vector2] = []
 var _chain_lag := [0.0, 0.18, 0.12, 0.22, 0.18]
@@ -106,9 +108,10 @@ func _ready() -> void:
 	_last_position = global_position
 	_set_random_wander_target("startup")
 
-func setup(world_model: WorldModel, analysis: CaveRegionAnalysis) -> void:
+func setup(world_model: WorldModel, analysis: CaveRegionAnalysis, manager: UnitManager = null) -> void:
 	world = world_model
 	cave_analysis = analysis
+	unit_manager = manager
 	_last_position = global_position
 	_request_frontier_plan("startup")
 
@@ -159,6 +162,7 @@ func get_debug_snapshot() -> Dictionary:
 		"frontier_breakthrough": float(_traversal_plan.get("breakthrough_value", 0.0)),
 		"frontier_connection": float(_traversal_plan.get("connection_value", 0.0)),
 		"frontier_dead_end_risk": float(_traversal_plan.get("dead_end_risk", 0.0)),
+		"frontier_crowding_penalty": float(_traversal_plan.get("crowding_penalty", 0.0)),
 		"frontier_external_distance": int(_traversal_plan.get("external_distance", 0)),
 		"path_cost": int(_traversal_plan.get("path_cost", 0)),
 		"replan_reason": _replan_reason,
@@ -353,16 +357,18 @@ func _choose_best_traversal_plan(snapshot: Dictionary, reachability: Dictionary,
 			var score_components := _frontier_score_components(first_frontier_cell, snapshot)
 			var frontier_utility := float(score_components.get("frontier_utility", 0.0))
 			var external_distance := int(score_components.get("external_distance", 999999))
+			var cluster_id := str(cluster.get("cluster_id", ""))
+			var crowding_penalty := _cluster_crowding_penalty(cluster_id)
 			var total_score := _frontier_total_score(
 				path_cost,
 				int(cluster.get("size", 0)),
 				alignment_score,
 				frontier_utility
-			)
+			) - crowding_penalty
 			var candidate := {
 				"revision": world.revision,
 				"region_id_anchor": snapshot.get("region_id_anchor", Vector2i(-1, -1)),
-				"cluster_id": str(cluster.get("cluster_id", "")),
+				"cluster_id": cluster_id,
 				"cluster_size": int(cluster.get("size", 0)),
 				"staging_cell": staging_cell,
 				"path_cells": path_cells,
@@ -376,6 +382,7 @@ func _choose_best_traversal_plan(snapshot: Dictionary, reachability: Dictionary,
 				"connection_value": float(score_components.get("connection_value", 0.0)),
 				"dead_end_risk": float(score_components.get("dead_end_risk", 0.0)),
 				"frontier_utility": frontier_utility,
+				"crowding_penalty": crowding_penalty,
 				"external_distance": external_distance,
 				"total_score": total_score,
 				"origin_region_lookup": snapshot.get("region_lookup", {}),
@@ -496,6 +503,11 @@ func _frontier_score_components(
 		"frontier_utility": 0.0,
 	})
 
+func _cluster_crowding_penalty(cluster_id: String) -> float:
+	if unit_manager == null or cluster_id.is_empty():
+		return 0.0
+	return float(unit_manager.cluster_claim_count(cluster_id, self)) * CLUSTER_CROWDING_PENALTY
+
 func _record_frontier_score(frontier_scores: Dictionary, candidate: Dictionary) -> void:
 	var frontier_cell: Vector2i = candidate.get("first_frontier_cell", Vector2i(-1, -1))
 	if frontier_cell.x < 0:
@@ -511,24 +523,43 @@ func _update_frontier_debug_scores(frontier_scores: Dictionary, selected_plan: D
 	_frontier_debug_entries.clear()
 	_frontier_debug_min_score = 0.0
 	_frontier_debug_max_score = 1.0
-	if frontier_scores.is_empty():
+	var utility_lookup: Dictionary = _current_snapshot.get("frontier_utility_by_cell", {})
+	if frontier_scores.is_empty() and utility_lookup.is_empty():
 		return
 
 	var min_score := INF
 	var max_score := -INF
 	var selected_frontier_cell: Vector2i = selected_plan.get("first_frontier_cell", Vector2i(-1, -1))
+	var entries_by_cell: Dictionary = {}
+	var cluster_ids_by_frontier := _snapshot_cluster_ids_by_frontier(_current_snapshot)
+	for frontier_cell_variant in utility_lookup.keys():
+		var frontier_cell: Vector2i = frontier_cell_variant
+		var utility_data: Dictionary = utility_lookup[frontier_cell]
+		entries_by_cell[frontier_cell] = {
+			"cell": frontier_cell,
+			"score": float(utility_data.get("frontier_utility", 0.0)),
+			"cluster_id": str(cluster_ids_by_frontier.get(frontier_cell, "")),
+			"is_selected": frontier_cell == selected_frontier_cell,
+		}
 	for frontier_cell_variant in frontier_scores.keys():
 		var frontier_cell: Vector2i = frontier_cell_variant
 		var candidate: Dictionary = frontier_scores[frontier_cell]
-		var score := float(candidate.get("total_score", 0.0))
-		min_score = minf(min_score, score)
-		max_score = maxf(max_score, score)
-		_frontier_debug_entries.append({
+		var entry: Dictionary = entries_by_cell.get(frontier_cell, {
 			"cell": frontier_cell,
-			"score": score,
 			"cluster_id": str(candidate.get("cluster_id", "")),
 			"is_selected": frontier_cell == selected_frontier_cell,
 		})
+		entry["score"] = float(candidate.get("total_score", entry.get("score", 0.0)))
+		entry["cluster_id"] = str(candidate.get("cluster_id", entry.get("cluster_id", "")))
+		entry["is_selected"] = frontier_cell == selected_frontier_cell
+		entries_by_cell[frontier_cell] = entry
+
+	for entry_variant in entries_by_cell.values():
+		var entry: Dictionary = entry_variant
+		var score := float(entry.get("score", 0.0))
+		min_score = minf(min_score, score)
+		max_score = maxf(max_score, score)
+		_frontier_debug_entries.append(entry)
 
 	_frontier_debug_entries.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 		return _is_cell_before(
@@ -538,6 +569,14 @@ func _update_frontier_debug_scores(frontier_scores: Dictionary, selected_plan: D
 	)
 	_frontier_debug_min_score = min_score
 	_frontier_debug_max_score = max_score
+
+func _snapshot_cluster_ids_by_frontier(snapshot: Dictionary) -> Dictionary:
+	var cluster_ids: Dictionary = {}
+	for cluster in _snapshot_frontier_clusters_from(snapshot):
+		var cluster_id := str(cluster.get("cluster_id", ""))
+		for frontier_cell in _cluster_frontier_cells(cluster):
+			cluster_ids[frontier_cell] = cluster_id
+	return cluster_ids
 
 func _clear_frontier_debug_scores() -> void:
 	_frontier_debug_entries.clear()
@@ -804,12 +843,14 @@ func _find_local_frontier_option(origin_cell: Vector2i, max_steps: int) -> Dicti
 			candidate["frontier_utility"] = float(score_components.get("frontier_utility", 0.0))
 			candidate["external_distance"] = int(score_components.get("external_distance", 999999))
 			var same_cluster := str(candidate.get("cluster_id", "")) == selected_cluster_id
+			var crowding_penalty := _cluster_crowding_penalty(str(candidate.get("cluster_id", "")))
+			candidate["crowding_penalty"] = crowding_penalty
 			candidate["score"] = _local_frontier_total_score(
 				steps,
 				float(candidate.get("alignment", 0.0)),
 				float(candidate.get("frontier_utility", 0.0)),
 				same_cluster
-			)
+			) - crowding_penalty
 			candidate["total_score"] = candidate["score"]
 			candidate["first_frontier_cell"] = frontier_cell
 			_record_frontier_score(frontier_scores, candidate)
@@ -885,6 +926,7 @@ func _commit_local_frontier_option(option: Dictionary) -> void:
 		_traversal_plan["connection_value"] = float(score_components.get("connection_value", 0.0))
 		_traversal_plan["dead_end_risk"] = float(score_components.get("dead_end_risk", 1.0))
 		_traversal_plan["frontier_utility"] = float(score_components.get("frontier_utility", 0.0))
+		_traversal_plan["crowding_penalty"] = float(option.get("crowding_penalty", 0.0))
 		_traversal_plan["external_distance"] = int(score_components.get("external_distance", 999999))
 	var cluster_id := str(option.get("cluster_id", ""))
 	if not cluster_id.is_empty():

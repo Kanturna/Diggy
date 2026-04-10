@@ -93,11 +93,12 @@ func _build_debug_text(cell: Vector2i) -> String:
 				]
 			)
 			lines.append(
-				"Utility: cavity=%.2f break=%.2f connect=%.2f dead=%.2f" % [
+				"Utility: cavity=%.2f break=%.2f connect=%.2f dead=%.2f crowd=%.2f" % [
 					float(creature_debug.get("frontier_cavity", 0.0)),
 					float(creature_debug.get("frontier_breakthrough", 0.0)),
 					float(creature_debug.get("frontier_connection", 0.0)),
 					float(creature_debug.get("frontier_dead_end_risk", 0.0)),
+					float(creature_debug.get("frontier_crowding_penalty", 0.0)),
 				]
 			)
 			lines.append(

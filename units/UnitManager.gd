@@ -34,7 +34,7 @@ func _spawn(world: WorldModel) -> void:
 			(cy + 0.5) * Config.CELL_SIZE,
 		)
 		add_child(c)
-		c.setup(world, _cave_region_analysis)
+		c.setup(world, _cave_region_analysis, self)
 		_creatures.append(c)
 		_register_spawn_region(snapshot)
 		spawned += 1
@@ -84,6 +84,18 @@ func _register_spawn_region(snapshot: Dictionary) -> void:
 
 func creature_count() -> int:
 	return _creatures.size()
+
+func cluster_claim_count(cluster_id: String, excluding: Creature = null) -> int:
+	if cluster_id.is_empty():
+		return 0
+	var count := 0
+	for creature in _creatures:
+		if creature == excluding:
+			continue
+		var creature_debug := creature.get_debug_snapshot()
+		if str(creature_debug.get("selected_cluster_id", "")) == cluster_id:
+			count += 1
+	return count
 
 func debug_snapshot() -> Dictionary:
 	if _creatures.is_empty():
