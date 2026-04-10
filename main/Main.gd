@@ -12,15 +12,37 @@ var world_generator: WorldGenerator
 var renderer: WorldMaterialRenderer
 var camera_controller: CameraController
 var debug_overlay: DebugOverlay
+var _startup_timings := {}
 
 func _ready() -> void:
+	var startup_begin_ms := Time.get_ticks_msec()
 	_setup_input_map()
+	var step_begin_ms := Time.get_ticks_msec()
 	_setup_world_core()
+	_startup_timings["world_core_ms"] = Time.get_ticks_msec() - step_begin_ms
+
+	step_begin_ms = Time.get_ticks_msec()
 	_generate_world()
+	_startup_timings["world_generate_ms"] = Time.get_ticks_msec() - step_begin_ms
+
+	step_begin_ms = Time.get_ticks_msec()
 	_setup_renderer()
+	_startup_timings["renderer_setup_ms"] = Time.get_ticks_msec() - step_begin_ms
+
+	step_begin_ms = Time.get_ticks_msec()
 	_setup_camera()
+	_startup_timings["camera_setup_ms"] = Time.get_ticks_msec() - step_begin_ms
+
+	step_begin_ms = Time.get_ticks_msec()
 	_setup_debug()
+	_startup_timings["debug_setup_ms"] = Time.get_ticks_msec() - step_begin_ms
+
+	step_begin_ms = Time.get_ticks_msec()
 	_connect_signals()
+	_startup_timings["signal_connect_ms"] = Time.get_ticks_msec() - step_begin_ms
+	_startup_timings["ready_total_ms"] = Time.get_ticks_msec() - startup_begin_ms
+	if debug_overlay != null:
+		debug_overlay.set_startup_timings(_startup_timings)
 
 func _process(_delta: float) -> void:
 	_on_chunks_dirtied()
