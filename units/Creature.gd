@@ -80,6 +80,8 @@ var _current_dig_cell := Vector2i(-1, -1)
 var _dig_head_cell := Vector2i(-1, -1)
 var _dig_direction := Vector2i.RIGHT
 var _dig_progress := 0.0
+var _dig_advancing := false
+var _dig_advance_target := Vector2.ZERO
 var _replan_reason := "startup"
 var _frontier_debug_entries: Array[Dictionary] = []
 var _frontier_debug_min_score := 0.0
@@ -228,6 +230,18 @@ func _tick_move_to_frontier(delta: float) -> void:
 		_start_dig_from_current_plan()
 
 func _tick_dig_block(delta: float) -> void:
+	if _dig_advancing:
+		var to_target := _dig_advance_target - global_position
+		var dist := to_target.length()
+		if dist <= SPEED * delta:
+			global_position = _dig_advance_target
+			velocity = Vector2.ZERO
+			_dig_advancing = false
+		else:
+			velocity = to_target.normalized() * SPEED
+			global_position += velocity * delta
+		return
+
 	if _traversal_plan.is_empty():
 		_request_frontier_plan("dig_missing_plan")
 		return
@@ -256,11 +270,16 @@ func _tick_dig_block(delta: float) -> void:
 		return
 
 	if world.carve_earth_cell(_current_dig_cell):
+		var actual_dir := _current_dig_cell - _dig_head_cell
+		if actual_dir != Vector2i.ZERO:
+			_dig_direction = actual_dir
 		_dig_head_cell = _current_dig_cell
-		global_position = _cell_center(_dig_head_cell)
+		_dig_advance_target = _cell_center(_dig_head_cell)
+		_dig_advancing = true
 		_dig_progress = 0.0
 		_current_dig_cell = Vector2i(-1, -1)
 		if _has_broken_through():
+			_dig_advancing = false
 			_request_frontier_plan("dig_breakthrough")
 			return
 	else:
@@ -500,6 +519,7 @@ func _adopt_traversal_plan(traversal_plan: Dictionary) -> void:
 	_dig_head_cell = Vector2i(-1, -1)
 	_dig_direction = traversal_plan.get("dig_direction", Vector2i.RIGHT)
 	_dig_progress = 0.0
+	_dig_advancing = false
 	_intent = Intent.MOVE_TO_FRONTIER
 	_current_action = "move"
 	_stuck_timer = 0.0
@@ -513,6 +533,7 @@ func _request_frontier_plan(reason: String) -> void:
 	_current_dig_cell = Vector2i(-1, -1)
 	_dig_head_cell = Vector2i(-1, -1)
 	_dig_progress = 0.0
+	_dig_advancing = false
 	_intent = Intent.CHOOSE_FRONTIER
 	_current_action = "choose"
 	_intent_timer = 0.0
@@ -527,8 +548,6 @@ func _set_random_wander_target(reason: String) -> void:
 func _move_replan_reason() -> String:
 	if _traversal_plan.is_empty():
 		return "no_plan"
-	if int(_traversal_plan.get("revision", -1)) != world.revision:
-		return "world_revision"
 	if _stuck_timer >= Config.CREATURE_STUCK_REPLAN_SECONDS:
 		return "stuck"
 
@@ -634,6 +653,7 @@ func _start_dig_from_current_plan() -> void:
 	_dig_direction = _traversal_plan.get("dig_direction", Vector2i.RIGHT)
 	_current_dig_cell = _traversal_plan.get("first_frontier_cell", Vector2i(-1, -1))
 	_dig_progress = 0.0
+	_dig_advancing = false
 	_intent = Intent.DIG_BLOCK
 	_current_action = "dig"
 
@@ -819,9 +839,15 @@ func _update_chain(delta: float) -> void:
 
 	if velocity.length() > MIN_SWIM_SPEED:
 		_swim_phase += delta * lerpf(SWIM_MIN, SWIM_MAX, speed_ratio)
+	elif _intent == Intent.DIG_BLOCK and not _dig_advancing:
+		_swim_phase += delta * (SWIM_MIN * 0.5)
 
-	var sway1 := sin(_swim_phase) * TAIL_R1 * SWAY1_MULT * speed_ratio
-	var sway2 := sin(_swim_phase - PHASE_OFF) * TAIL_R1 * SWAY2_MULT * speed_ratio
+	var sway_ratio := speed_ratio
+	if _intent == Intent.DIG_BLOCK and not _dig_advancing:
+		sway_ratio = 0.25
+
+	var sway1 := sin(_swim_phase) * TAIL_R1 * SWAY1_MULT * sway_ratio
+	var sway2 := sin(_swim_phase - PHASE_OFF) * TAIL_R1 * SWAY2_MULT * sway_ratio
 
 	var ideal1 := _chain_pos[2] + back * (TAIL_BASE_OFF + TAIL_R1 * TAIL1_EXTRA) + side * sway1
 	var ideal2 := ideal1 + back * (TAIL_R1 * SEG_GAP1 + TAIL_R2 * SEG_GAP2) + side * sway2
