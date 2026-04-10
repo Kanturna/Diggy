@@ -85,11 +85,19 @@ func _build_debug_text(cell: Vector2i) -> String:
 				]
 			)
 			lines.append(
-				"Cluster: %s score=%.2f attr=%.2f dist=%d" % [
+				"Cluster: %s total=%.2f utility=%.2f dist=%d" % [
 					str(creature_debug.get("selected_cluster_id", "")),
 					float(creature_debug.get("frontier_score", 0.0)),
-					float(creature_debug.get("frontier_attraction", 0.0)),
+					float(creature_debug.get("frontier_utility", 0.0)),
 					int(creature_debug.get("frontier_external_distance", 0)),
+				]
+			)
+			lines.append(
+				"Utility: cavity=%.2f break=%.2f connect=%.2f dead=%.2f" % [
+					float(creature_debug.get("frontier_cavity", 0.0)),
+					float(creature_debug.get("frontier_breakthrough", 0.0)),
+					float(creature_debug.get("frontier_connection", 0.0)),
+					float(creature_debug.get("frontier_dead_end_risk", 0.0)),
 				]
 			)
 			lines.append(

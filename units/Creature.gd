@@ -49,15 +49,10 @@ const CARDINAL_DIRS: Array[Vector2i] = [
 ]
 const LOCAL_FRONTIER_SEARCH_STEPS := 3
 const LOCAL_DIG_CONTINUE_STEPS := 1
-const NEARBY_CAVITY_SEARCH_RADIUS := 16
-const NEARBY_CAVITY_MAX_LATERAL := 3
-const NEARBY_CAVITY_WEIGHT := 3.6
-const DEAD_END_FRONTIER_PENALTY := 1.2
 const DIG_REEVAL_BLOCK_INTERVAL := 3
 const LOCAL_ALIGNMENT_WEIGHT := 0.1
 const LOCAL_SELECTED_CLUSTER_BONUS := 0.45
-const EXTERNAL_INTEREST_FULL_SCORE := 0.35
-const EXTERNAL_INTEREST_MIN_SCORE := 0.08
+const FRONTIER_UTILITY_WEIGHT := 4.6
 
 enum Intent {
 	WANDER,
@@ -159,7 +154,11 @@ func get_debug_snapshot() -> Dictionary:
 		"path_index": _current_path_index,
 		"first_frontier_cell": first_frontier_cell,
 		"frontier_score": float(_traversal_plan.get("total_score", 0.0)),
-		"frontier_attraction": float(_traversal_plan.get("attraction_score", 0.0)),
+		"frontier_utility": float(_traversal_plan.get("frontier_utility", 0.0)),
+		"frontier_cavity": float(_traversal_plan.get("cavity_proximity_score", 0.0)),
+		"frontier_breakthrough": float(_traversal_plan.get("breakthrough_value", 0.0)),
+		"frontier_connection": float(_traversal_plan.get("connection_value", 0.0)),
+		"frontier_dead_end_risk": float(_traversal_plan.get("dead_end_risk", 0.0)),
 		"frontier_external_distance": int(_traversal_plan.get("external_distance", 0)),
 		"path_cost": int(_traversal_plan.get("path_cost", 0)),
 		"replan_reason": _replan_reason,
@@ -352,13 +351,13 @@ func _choose_best_traversal_plan(snapshot: Dictionary, reachability: Dictionary,
 			var path_cost := path_cells.size() - 1
 			var alignment_score := _path_alignment_score(path_cells, dig_direction)
 			var score_components := _frontier_score_components(first_frontier_cell, snapshot)
-			var attraction_score := float(score_components.get("attraction_score", 0.0))
+			var frontier_utility := float(score_components.get("frontier_utility", 0.0))
 			var external_distance := int(score_components.get("external_distance", 999999))
 			var total_score := _frontier_total_score(
 				path_cost,
 				int(cluster.get("size", 0)),
 				alignment_score,
-				attraction_score
+				frontier_utility
 			)
 			var candidate := {
 				"revision": world.revision,
@@ -372,7 +371,11 @@ func _choose_best_traversal_plan(snapshot: Dictionary, reachability: Dictionary,
 				"dig_direction": dig_direction,
 				"path_cost": path_cost,
 				"alignment_score": alignment_score,
-				"attraction_score": attraction_score,
+				"cavity_proximity_score": float(score_components.get("cavity_proximity_score", 0.0)),
+				"breakthrough_value": float(score_components.get("breakthrough_value", 0.0)),
+				"connection_value": float(score_components.get("connection_value", 0.0)),
+				"dead_end_risk": float(score_components.get("dead_end_risk", 0.0)),
+				"frontier_utility": frontier_utility,
 				"external_distance": external_distance,
 				"total_score": total_score,
 				"origin_region_lookup": snapshot.get("region_lookup", {}),
@@ -456,47 +459,41 @@ func _frontier_total_score(
 	path_cost: int,
 	cluster_size: int,
 	alignment_score: float,
-	attraction_score: float
+	frontier_utility: float
 ) -> float:
-	var interest_factor := clampf(attraction_score, 0.0, 1.0)
 	var total := \
-		attraction_score * (Config.CREATURE_FRONTIER_PROSPECT_WEIGHT + NEARBY_CAVITY_WEIGHT) \
+		frontier_utility * FRONTIER_UTILITY_WEIGHT \
 		- float(path_cost) * Config.CREATURE_FRONTIER_PATH_COST_WEIGHT \
-		+ float(cluster_size) * Config.CREATURE_FRONTIER_CLUSTER_SIZE_WEIGHT * lerpf(0.15, 1.0, interest_factor) \
-		+ alignment_score * Config.CREATURE_FRONTIER_ALIGNMENT_WEIGHT * lerpf(0.35, 1.0, interest_factor)
-	if attraction_score <= 0.001:
-		total -= DEAD_END_FRONTIER_PENALTY
-	elif attraction_score < EXTERNAL_INTEREST_MIN_SCORE:
-		total -= (EXTERNAL_INTEREST_MIN_SCORE - attraction_score) * 4.0
+		+ float(cluster_size) * Config.CREATURE_FRONTIER_CLUSTER_SIZE_WEIGHT \
+		+ alignment_score * Config.CREATURE_FRONTIER_ALIGNMENT_WEIGHT
 	return total
 
 func _local_frontier_total_score(
 	steps: int,
 	alignment_score: float,
-	attraction_score: float,
+	frontier_utility: float,
 	same_cluster: bool
 ) -> float:
-	var interest_factor := clampf(attraction_score, 0.0, 1.0)
 	var total := \
-		attraction_score * (Config.CREATURE_FRONTIER_PROSPECT_WEIGHT + NEARBY_CAVITY_WEIGHT) \
+		frontier_utility * FRONTIER_UTILITY_WEIGHT \
 		- float(steps) * Config.CREATURE_FRONTIER_PATH_COST_WEIGHT \
-		+ alignment_score * LOCAL_ALIGNMENT_WEIGHT * lerpf(0.35, 1.0, interest_factor)
+		+ alignment_score * LOCAL_ALIGNMENT_WEIGHT
 	if same_cluster:
-		total += LOCAL_SELECTED_CLUSTER_BONUS * lerpf(0.35, 1.0, interest_factor)
-	if attraction_score <= 0.001:
-		total -= DEAD_END_FRONTIER_PENALTY
-	elif attraction_score < EXTERNAL_INTEREST_MIN_SCORE:
-		total -= (EXTERNAL_INTEREST_MIN_SCORE - attraction_score) * 3.0
+		total += LOCAL_SELECTED_CLUSTER_BONUS
 	return total
 
 func _frontier_score_components(
 	frontier_cell: Vector2i,
 	snapshot: Dictionary
 ) -> Dictionary:
-	var attraction_lookup: Dictionary = snapshot.get("frontier_attraction_by_cell", {})
-	return attraction_lookup.get(frontier_cell, {
+	var utility_lookup: Dictionary = snapshot.get("frontier_utility_by_cell", {})
+	return utility_lookup.get(frontier_cell, {
 		"external_distance": 999999,
-		"attraction_score": 0.0,
+		"cavity_proximity_score": 0.0,
+		"breakthrough_value": 0.0,
+		"connection_value": 0.0,
+		"dead_end_risk": 1.0,
+		"frontier_utility": 0.0,
 	})
 
 func _record_frontier_score(frontier_scores: Dictionary, candidate: Dictionary) -> void:
@@ -800,13 +797,17 @@ func _find_local_frontier_option(origin_cell: Vector2i, max_steps: int) -> Dicti
 				"alignment": float(direction.x * _dig_direction.x + direction.y * _dig_direction.y),
 			}
 			var score_components := _frontier_score_components(frontier_cell, snapshot)
-			candidate["attraction_score"] = float(score_components.get("attraction_score", 0.0))
+			candidate["cavity_proximity_score"] = float(score_components.get("cavity_proximity_score", 0.0))
+			candidate["breakthrough_value"] = float(score_components.get("breakthrough_value", 0.0))
+			candidate["connection_value"] = float(score_components.get("connection_value", 0.0))
+			candidate["dead_end_risk"] = float(score_components.get("dead_end_risk", 1.0))
+			candidate["frontier_utility"] = float(score_components.get("frontier_utility", 0.0))
 			candidate["external_distance"] = int(score_components.get("external_distance", 999999))
 			var same_cluster := str(candidate.get("cluster_id", "")) == selected_cluster_id
 			candidate["score"] = _local_frontier_total_score(
 				steps,
 				float(candidate.get("alignment", 0.0)),
-				float(candidate.get("attraction_score", 0.0)),
+				float(candidate.get("frontier_utility", 0.0)),
 				same_cluster
 			)
 			candidate["total_score"] = candidate["score"]
@@ -879,7 +880,11 @@ func _commit_local_frontier_option(option: Dictionary) -> void:
 		if dig_direction != Vector2i.ZERO:
 			_traversal_plan["dig_direction"] = dig_direction
 		var score_components := _frontier_score_components(frontier_cell, _current_snapshot)
-		_traversal_plan["attraction_score"] = float(score_components.get("attraction_score", 0.0))
+		_traversal_plan["cavity_proximity_score"] = float(score_components.get("cavity_proximity_score", 0.0))
+		_traversal_plan["breakthrough_value"] = float(score_components.get("breakthrough_value", 0.0))
+		_traversal_plan["connection_value"] = float(score_components.get("connection_value", 0.0))
+		_traversal_plan["dead_end_risk"] = float(score_components.get("dead_end_risk", 1.0))
+		_traversal_plan["frontier_utility"] = float(score_components.get("frontier_utility", 0.0))
 		_traversal_plan["external_distance"] = int(score_components.get("external_distance", 999999))
 	var cluster_id := str(option.get("cluster_id", ""))
 	if not cluster_id.is_empty():
