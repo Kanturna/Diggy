@@ -16,6 +16,7 @@ var variants := PackedByteArray()
 var flags := PackedInt32Array()
 
 var _dirty_chunk_keys: Dictionary = {}
+var _bulk_update_depth := 0
 
 func setup(new_width: int, new_height: int, new_chunk_size: int, new_seed: int) -> void:
 	width = new_width
@@ -64,10 +65,13 @@ func set_cell(x: int, y: int, material: int, variant: int, cell_flags: int) -> v
 	if not is_in_bounds(x, y):
 		return
 	var i := index_of(x, y)
+	if materials[i] == material and variants[i] == variant and flags[i] == cell_flags:
+		return
 	materials[i] = material
 	variants[i] = variant
 	flags[i] = cell_flags
-	mark_dirty_by_cell(x, y)
+	if _bulk_update_depth == 0:
+		mark_dirty_by_cell(x, y)
 
 func set_material(x: int, y: int, material: int, variant_override: int = -1) -> void:
 	if not is_in_bounds(x, y):
@@ -100,6 +104,16 @@ func get_and_clear_dirty_chunks() -> Array[Vector2i]:
 
 func clear_dirty_chunks() -> void:
 	_dirty_chunk_keys.clear()
+
+func begin_bulk_update() -> void:
+	_bulk_update_depth += 1
+
+func end_bulk_update(mark_dirty: bool = true) -> void:
+	if _bulk_update_depth == 0:
+		return
+	_bulk_update_depth -= 1
+	if _bulk_update_depth == 0 and mark_dirty:
+		mark_world_dirty()
 
 func mark_world_dirty() -> void:
 	var chunks_x := int(ceil(float(width) / float(chunk_size)))

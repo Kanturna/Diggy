@@ -30,8 +30,11 @@ func _process(_delta: float) -> void:
 
 func _build_debug_text(cell: Vector2i) -> String:
 	var lines: Array[String] = []
+	var camera := get_viewport().get_camera_2d()
 	lines.append("FPS: %d" % Engine.get_frames_per_second())
 	lines.append("Seed: %d" % world.seed)
+	if camera != null:
+		lines.append("Zoom: %.2f" % camera.zoom.x)
 	lines.append("Cell: (%d, %d)" % [cell.x, cell.y])
 
 	if not world.is_in_bounds(cell.x, cell.y):

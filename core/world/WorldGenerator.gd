@@ -6,12 +6,13 @@ const CellFlags = preload("res://core/CellFlags.gd")
 const Config = preload("res://core/Config.gd")
 
 func generate(world: WorldModel) -> void:
+	world.begin_bulk_update()
 	_fill_with_earth(world)
 	_carve_noise_caves(world)
 	for _i in Config.CAVE_SMOOTH_PASSES:
 		_smooth_pass(world)
 	_apply_variants(world)
-	world.mark_world_dirty()
+	world.end_bulk_update()
 
 func _fill_with_earth(world: WorldModel) -> void:
 	for y in world.height:
