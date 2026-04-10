@@ -32,19 +32,20 @@ func get_region_snapshot(origin_cell: Vector2i) -> Dictionary:
 		var region_anchor: Vector2i = _region_anchor_by_cell[origin_cell]
 		return _snapshot_by_anchor.get(region_anchor, {})
 
-	var snapshot := _build_snapshot(origin_cell)
+	var snapshot: Dictionary = _build_snapshot(origin_cell)
 	if snapshot.is_empty():
 		return {}
 
 	var snapshot_anchor: Vector2i = snapshot.get("region_id_anchor", Vector2i(-1, -1))
 	_snapshot_by_anchor[snapshot_anchor] = snapshot
 	var region_lookup: Dictionary = snapshot.get("region_lookup", {})
-	for cell in region_lookup.keys():
+	for cell_variant in region_lookup.keys():
+		var cell: Vector2i = cell_variant
 		_region_anchor_by_cell[cell] = snapshot_anchor
 	return snapshot
 
 func build_reachability(snapshot: Dictionary, start_cell: Vector2i) -> Dictionary:
-	var reachability := {
+	var reachability: Dictionary = {
 		"distance": {},
 		"came_from": {},
 	}
@@ -110,7 +111,7 @@ func _build_snapshot(origin_cell: Vector2i) -> Dictionary:
 	var queue_index := 0
 	var region_lookup: Dictionary = {}
 	var region_cells: Array[Vector2i] = []
-	var region_anchor := origin_cell
+	var region_anchor: Vector2i = origin_cell
 	region_lookup[origin_cell] = true
 	region_cells.append(origin_cell)
 
@@ -146,7 +147,7 @@ func _build_snapshot(origin_cell: Vector2i) -> Dictionary:
 			var staging_lookup: Dictionary = frontier_staging_by_cell[neighbor]
 			staging_lookup[cell] = true
 
-	var frontier_clusters := _build_frontier_clusters(frontier_staging_by_cell)
+	var frontier_clusters: Array[Dictionary] = _build_frontier_clusters(frontier_staging_by_cell)
 	var boundary_cells: Array[Vector2i] = _sorted_cells_from_lookup(boundary_lookup)
 
 	return {
@@ -161,12 +162,14 @@ func _build_snapshot(origin_cell: Vector2i) -> Dictionary:
 
 func _build_frontier_clusters(frontier_staging_by_cell: Dictionary) -> Array[Dictionary]:
 	var frontier_lookup: Dictionary = {}
-	for frontier_cell in frontier_staging_by_cell.keys():
+	for frontier_cell_variant in frontier_staging_by_cell.keys():
+		var frontier_cell: Vector2i = frontier_cell_variant
 		frontier_lookup[frontier_cell] = true
 
 	var visited: Dictionary = {}
 	var clusters: Array[Dictionary] = []
-	for frontier_cell in frontier_lookup.keys():
+	for frontier_cell_variant in frontier_lookup.keys():
+		var frontier_cell: Vector2i = frontier_cell_variant
 		if visited.has(frontier_cell):
 			continue
 
@@ -174,8 +177,8 @@ func _build_frontier_clusters(frontier_staging_by_cell: Dictionary) -> Array[Dic
 		var queue_index := 0
 		var cluster_lookup: Dictionary = {}
 		var staging_lookup: Dictionary = {}
-		var cluster_anchor := frontier_cell
-		var centroid_acc := Vector2.ZERO
+		var cluster_anchor: Vector2i = frontier_cell
+		var centroid_acc: Vector2 = Vector2.ZERO
 
 		visited[frontier_cell] = true
 		cluster_lookup[frontier_cell] = true
@@ -188,7 +191,8 @@ func _build_frontier_clusters(frontier_staging_by_cell: Dictionary) -> Array[Dic
 				cluster_anchor = current
 
 			var local_staging_lookup: Dictionary = frontier_staging_by_cell.get(current, {})
-			for staging_cell in local_staging_lookup.keys():
+			for staging_cell_variant in local_staging_lookup.keys():
+				var staging_cell: Vector2i = staging_cell_variant
 				staging_lookup[staging_cell] = true
 
 			for direction in CARDINAL_DIRS:
@@ -203,7 +207,7 @@ func _build_frontier_clusters(frontier_staging_by_cell: Dictionary) -> Array[Dic
 
 		var frontier_cells: Array[Vector2i] = _sorted_cells_from_lookup(cluster_lookup)
 		var staging_cells: Array[Vector2i] = _sorted_cells_from_lookup(staging_lookup)
-		var centroid := centroid_acc / maxf(float(frontier_cells.size()), 1.0)
+		var centroid: Vector2 = centroid_acc / maxf(float(frontier_cells.size()), 1.0)
 		clusters.append({
 			"cluster_id": "cluster_%d_%d" % [cluster_anchor.x, cluster_anchor.y],
 			"cluster_anchor": cluster_anchor,
@@ -225,7 +229,8 @@ func _build_frontier_clusters(frontier_staging_by_cell: Dictionary) -> Array[Dic
 
 func _sorted_cells_from_lookup(lookup: Dictionary) -> Array[Vector2i]:
 	var cells: Array[Vector2i] = []
-	for cell in lookup.keys():
+	for cell_variant in lookup.keys():
+		var cell: Vector2i = cell_variant
 		cells.append(cell)
 	cells.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
 		return _is_cell_before(a, b)
