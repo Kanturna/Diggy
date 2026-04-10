@@ -8,6 +8,7 @@ const Config = preload("res://core/Config.gd")
 
 var world: WorldModel
 var renderer: WorldMaterialRenderer
+var unit_manager: UnitManager = null
 var is_visible_overlay := true
 var startup_timings := {}
 
@@ -37,6 +38,8 @@ func _build_debug_text(cell: Vector2i) -> String:
 	var camera := get_viewport().get_camera_2d()
 	lines.append("FPS: %d" % Engine.get_frames_per_second())
 	lines.append("Seed: %d" % world.seed)
+	if unit_manager != null:
+		lines.append("Creatures: %d" % unit_manager.creature_count())
 	if not startup_timings.is_empty():
 		lines.append(
 			"Load ms: total=%d gen=%d render=%d" % [
@@ -46,9 +49,10 @@ func _build_debug_text(cell: Vector2i) -> String:
 			]
 		)
 		lines.append(
-			"Load detail: core=%d cam=%d dbg=%d sig=%d" % [
+			"Load detail: core=%d cam=%d unit=%d dbg=%d sig=%d" % [
 				int(startup_timings.get("world_core_ms", 0)),
 				int(startup_timings.get("camera_setup_ms", 0)),
+				int(startup_timings.get("unit_setup_ms", 0)),
 				int(startup_timings.get("debug_setup_ms", 0)),
 				int(startup_timings.get("signal_connect_ms", 0)),
 			]
