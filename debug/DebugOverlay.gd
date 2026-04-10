@@ -85,20 +85,34 @@ func _build_debug_text(cell: Vector2i) -> String:
 				]
 			)
 			lines.append(
-				"Cluster: %s total=%.2f utility=%.2f dist=%d" % [
+				"Cluster: %s total=%.2f build=%.2f sensor=%.2f" % [
 					str(creature_debug.get("selected_cluster_id", "")),
 					float(creature_debug.get("frontier_score", 0.0)),
-					float(creature_debug.get("frontier_utility", 0.0)),
-					int(creature_debug.get("frontier_external_distance", 0)),
+					float(creature_debug.get("build_score", 0.0)),
+					float(creature_debug.get("sensor_score", 0.0)),
 				]
 			)
 			lines.append(
-				"Utility: cavity=%.2f break=%.2f connect=%.2f dead=%.2f crowd=%.2f" % [
-					float(creature_debug.get("frontier_cavity", 0.0)),
-					float(creature_debug.get("frontier_breakthrough", 0.0)),
-					float(creature_debug.get("frontier_connection", 0.0)),
-					float(creature_debug.get("frontier_dead_end_risk", 0.0)),
+				"Signals: depth=%.2f cont=%.2f hollow=%.2f span=%.2f path=%d" % [
+					float(creature_debug.get("depth_score", 0.0)),
+					float(creature_debug.get("continuity_score", 0.0)),
+					float(creature_debug.get("sensor_hollow_score", 0.0)),
+					float(creature_debug.get("sensor_open_span_score", 0.0)),
+					int(creature_debug.get("path_cost", 0)),
+				]
+			)
+			lines.append(
+				"Penalty: parallel=%.2f niche=%.2f scrape=%.2f crowd=%.2f" % [
+					float(creature_debug.get("parallel_risk", 0.0)),
+					float(creature_debug.get("niche_risk", 0.0)),
+					float(creature_debug.get("scrape_penalty", 0.0)),
 					float(creature_debug.get("frontier_crowding_penalty", 0.0)),
+				]
+			)
+			lines.append(
+				"Pick: weight=%.2f filter=%s" % [
+					float(creature_debug.get("selection_weight", 0.0)),
+					str(creature_debug.get("filter_reason", "")),
 				]
 			)
 			lines.append(

@@ -3,6 +3,7 @@ class_name Creature
 
 const MaterialType = preload("res://core/MaterialType.gd")
 const Config = preload("res://core/Config.gd")
+const DigPlannerScript = preload("res://units/DigPlanner.gd")
 
 const LOWER_R := 1.15
 const UPPER_R := 1.00
@@ -50,9 +51,6 @@ const CARDINAL_DIRS: Array[Vector2i] = [
 const LOCAL_FRONTIER_SEARCH_STEPS := 3
 const LOCAL_DIG_CONTINUE_STEPS := 1
 const DIG_REEVAL_BLOCK_INTERVAL := 3
-const LOCAL_ALIGNMENT_WEIGHT := 0.1
-const LOCAL_SELECTED_CLUSTER_BONUS := 0.45
-const FRONTIER_UTILITY_WEIGHT := 4.6
 const CLUSTER_CROWDING_PENALTY := 0.55
 
 enum Intent {
@@ -67,6 +65,8 @@ var velocity := Vector2.ZERO
 var world: WorldModel = null
 var cave_analysis: CaveRegionAnalysis = null
 var unit_manager: UnitManager = null
+var _dig_planner: DigPlanner = null
+var _decision_rng: RandomNumberGenerator = null
 
 var _chain_pos: Array[Vector2] = []
 var _chain_lag := [0.0, 0.18, 0.12, 0.22, 0.18]
@@ -112,6 +112,12 @@ func setup(world_model: WorldModel, analysis: CaveRegionAnalysis, manager: UnitM
 	world = world_model
 	cave_analysis = analysis
 	unit_manager = manager
+	_dig_planner = DigPlannerScript.new()
+	_decision_rng = RandomNumberGenerator.new()
+	var spawn_cell := _world_to_cell(global_position)
+	_decision_rng.seed = int(world.seed) \
+		^ int(spawn_cell.x * 73856093) \
+		^ int(spawn_cell.y * 19349663)
 	_last_position = global_position
 	_request_frontier_plan("startup")
 
@@ -157,14 +163,19 @@ func get_debug_snapshot() -> Dictionary:
 		"path_index": _current_path_index,
 		"first_frontier_cell": first_frontier_cell,
 		"frontier_score": float(_traversal_plan.get("total_score", 0.0)),
-		"frontier_utility": float(_traversal_plan.get("frontier_utility", 0.0)),
-		"frontier_cavity": float(_traversal_plan.get("cavity_proximity_score", 0.0)),
-		"frontier_breakthrough": float(_traversal_plan.get("breakthrough_value", 0.0)),
-		"frontier_connection": float(_traversal_plan.get("connection_value", 0.0)),
-		"frontier_dead_end_risk": float(_traversal_plan.get("dead_end_risk", 0.0)),
+		"build_score": float(_traversal_plan.get("build_score", 0.0)),
+		"sensor_score": float(_traversal_plan.get("sensor_score", 0.0)),
+		"depth_score": float(_traversal_plan.get("depth_score", 0.0)),
+		"continuity_score": float(_traversal_plan.get("continuity_score", 0.0)),
+		"sensor_hollow_score": float(_traversal_plan.get("sensor_hollow_score", 0.0)),
+		"sensor_open_span_score": float(_traversal_plan.get("sensor_open_span_score", 0.0)),
+		"parallel_risk": float(_traversal_plan.get("parallel_risk", 0.0)),
+		"niche_risk": float(_traversal_plan.get("niche_risk", 0.0)),
+		"scrape_penalty": float(_traversal_plan.get("scrape_penalty", 0.0)),
 		"frontier_crowding_penalty": float(_traversal_plan.get("crowding_penalty", 0.0)),
-		"frontier_external_distance": int(_traversal_plan.get("external_distance", 0)),
 		"path_cost": int(_traversal_plan.get("path_cost", 0)),
+		"selection_weight": float(_traversal_plan.get("selection_weight", 0.0)),
+		"filter_reason": str(_traversal_plan.get("filter_reason", "")),
 		"replan_reason": _replan_reason,
 	}
 
@@ -331,252 +342,103 @@ func _tick_dig_block(delta: float) -> void:
 		_current_dig_cell = Vector2i(-1, -1)
 
 func _choose_best_traversal_plan(snapshot: Dictionary, reachability: Dictionary, origin_cell: Vector2i) -> Dictionary:
-	var best_plan: Dictionary = {}
-	var best_zero_step_plan: Dictionary = {}
-	var frontier_scores: Dictionary = {}
-	for cluster in _snapshot_frontier_clusters():
-		var staging_cells: Array[Vector2i] = _cluster_staging_cells(cluster)
-		for staging_cell in staging_cells:
-			if not _is_navigable_cell(staging_cell):
-				continue
-			var distance_map: Dictionary = reachability.get("distance", {})
-			if not distance_map.has(staging_cell):
-				continue
+	return _choose_best_traversal_plan_with_limit(snapshot, reachability, origin_cell, -1)
 
-			var path_cells := cave_analysis.reconstruct_path(reachability, origin_cell, staging_cell)
-			if path_cells.is_empty():
-				continue
+func _choose_best_traversal_plan_with_limit(
+	snapshot: Dictionary,
+	reachability: Dictionary,
+	origin_cell: Vector2i,
+	max_path_cost: int
+) -> Dictionary:
+	var planner_result := _planner_result(snapshot, reachability, origin_cell, max_path_cost)
+	var selected_candidate: Dictionary = planner_result.get("selected_candidate", {})
+	if selected_candidate.is_empty():
+		return {}
+	return _traversal_plan_from_candidate(snapshot, reachability, origin_cell, selected_candidate)
 
-			var first_frontier_cell := _select_first_frontier_cell(cluster, staging_cell, path_cells)
-			if first_frontier_cell.x < 0:
-				continue
+func _planner_result(
+	snapshot: Dictionary,
+	reachability: Dictionary,
+	origin_cell: Vector2i,
+	max_path_cost: int
+) -> Dictionary:
+	if _dig_planner == null:
+		_clear_frontier_debug_scores()
+		return {}
+	var planner_result := _dig_planner.choose_candidate(
+		snapshot,
+		reachability,
+		origin_cell,
+		_planner_reference_direction(),
+		str(_traversal_plan.get("cluster_id", "")),
+		Callable(self, "_cluster_crowding_penalty"),
+		_decision_rng,
+		max_path_cost
+	)
+	_update_frontier_debug_scores(planner_result)
+	return planner_result
 
-			var dig_direction: Vector2i = first_frontier_cell - staging_cell
-			var path_cost := path_cells.size() - 1
-			var alignment_score := _path_alignment_score(path_cells, dig_direction)
-			var score_components := _frontier_score_components(first_frontier_cell, snapshot)
-			var frontier_utility := float(score_components.get("frontier_utility", 0.0))
-			var external_distance := int(score_components.get("external_distance", 999999))
-			var cluster_id := str(cluster.get("cluster_id", ""))
-			var crowding_penalty := _cluster_crowding_penalty(cluster_id)
-			var total_score := _frontier_total_score(
-				path_cost,
-				int(cluster.get("size", 0)),
-				alignment_score,
-				frontier_utility
-			) - crowding_penalty
-			var candidate := {
-				"revision": world.revision,
-				"region_id_anchor": snapshot.get("region_id_anchor", Vector2i(-1, -1)),
-				"cluster_id": cluster_id,
-				"cluster_size": int(cluster.get("size", 0)),
-				"staging_cell": staging_cell,
-				"path_cells": path_cells,
-				"path_index": 1 if path_cells.size() > 1 else 0,
-				"first_frontier_cell": first_frontier_cell,
-				"dig_direction": dig_direction,
-				"path_cost": path_cost,
-				"alignment_score": alignment_score,
-				"cavity_proximity_score": float(score_components.get("cavity_proximity_score", 0.0)),
-				"breakthrough_value": float(score_components.get("breakthrough_value", 0.0)),
-				"connection_value": float(score_components.get("connection_value", 0.0)),
-				"dead_end_risk": float(score_components.get("dead_end_risk", 0.0)),
-				"frontier_utility": frontier_utility,
-				"crowding_penalty": crowding_penalty,
-				"external_distance": external_distance,
-				"total_score": total_score,
-				"origin_region_lookup": snapshot.get("region_lookup", {}),
-			}
-			_record_frontier_score(frontier_scores, candidate)
-			if path_cost == 0:
-				if _is_better_traversal_candidate(candidate, best_zero_step_plan):
-					best_zero_step_plan = candidate
-				continue
-			if _is_better_traversal_candidate(candidate, best_plan):
-				best_plan = candidate
-	var selected_plan: Dictionary = best_plan if not best_plan.is_empty() else best_zero_step_plan
-	_update_frontier_debug_scores(frontier_scores, selected_plan)
-	if not best_plan.is_empty():
-		return best_plan
-	return best_zero_step_plan
-
-func _is_better_traversal_candidate(candidate: Dictionary, incumbent: Dictionary) -> bool:
-	if incumbent.is_empty():
-		return true
-
-	var candidate_score := float(candidate.get("total_score", -INF))
-	var incumbent_score := float(incumbent.get("total_score", -INF))
-	if not is_equal_approx(candidate_score, incumbent_score):
-		return candidate_score > incumbent_score
-
-	var candidate_cluster_size := int(candidate.get("cluster_size", 0))
-	var incumbent_cluster_size := int(incumbent.get("cluster_size", 0))
-	if candidate_cluster_size != incumbent_cluster_size:
-		return candidate_cluster_size > incumbent_cluster_size
-
-	var candidate_alignment := float(candidate.get("alignment_score", -INF))
-	var incumbent_alignment := float(incumbent.get("alignment_score", -INF))
-	if not is_equal_approx(candidate_alignment, incumbent_alignment):
-		return candidate_alignment > incumbent_alignment
-
-	var candidate_staging: Vector2i = candidate.get("staging_cell", Vector2i(-1, -1))
-	var incumbent_staging: Vector2i = incumbent.get("staging_cell", Vector2i(-1, -1))
-	if candidate_staging != incumbent_staging:
-		return _is_cell_before(candidate_staging, incumbent_staging)
-
-	var candidate_frontier: Vector2i = candidate.get("first_frontier_cell", Vector2i(-1, -1))
-	var incumbent_frontier: Vector2i = incumbent.get("first_frontier_cell", Vector2i(-1, -1))
-	return _is_cell_before(candidate_frontier, incumbent_frontier)
-
-func _select_first_frontier_cell(cluster: Dictionary, staging_cell: Vector2i, path_cells: Array[Vector2i]) -> Vector2i:
-	var frontier_cells := _cluster_frontier_cells(cluster)
-	var preferred_dir := _preferred_frontier_direction(path_cells)
-	var best_cell := Vector2i(-1, -1)
-	var best_alignment := -INF
-	for frontier_cell in frontier_cells:
-		if not _are_cells_adjacent(frontier_cell, staging_cell):
-			continue
-		var candidate_dir: Vector2i = frontier_cell - staging_cell
-		var alignment := float(candidate_dir.x * preferred_dir.x + candidate_dir.y * preferred_dir.y)
-		if alignment > best_alignment:
-			best_alignment = alignment
-			best_cell = frontier_cell
-			continue
-		if is_equal_approx(alignment, best_alignment) and _is_cell_before(frontier_cell, best_cell):
-			best_cell = frontier_cell
-	return best_cell
-
-func _preferred_frontier_direction(path_cells: Array[Vector2i]) -> Vector2i:
-	if path_cells.size() >= 2:
-		var last_cell: Vector2i = path_cells[path_cells.size() - 1]
-		var previous_cell: Vector2i = path_cells[path_cells.size() - 2]
-		var path_dir := last_cell - previous_cell
-		if path_dir != Vector2i.ZERO:
-			return path_dir
+func _planner_reference_direction() -> Vector2i:
+	if _dig_direction != Vector2i.ZERO:
+		return _dig_direction
 	return _vector_to_cardinal(_facing_dir)
 
-func _path_alignment_score(path_cells: Array[Vector2i], dig_direction: Vector2i) -> float:
-	if path_cells.size() >= 2:
-		var path_dir: Vector2i = path_cells[1] - path_cells[0]
-		return float(path_dir.x * dig_direction.x + path_dir.y * dig_direction.y)
-	var facing_cardinal := _vector_to_cardinal(_facing_dir)
-	return float(facing_cardinal.x * dig_direction.x + facing_cardinal.y * dig_direction.y)
-
-func _frontier_total_score(
-	path_cost: int,
-	cluster_size: int,
-	alignment_score: float,
-	frontier_utility: float
-) -> float:
-	var total := \
-		frontier_utility * FRONTIER_UTILITY_WEIGHT \
-		- float(path_cost) * Config.CREATURE_FRONTIER_PATH_COST_WEIGHT \
-		+ float(cluster_size) * Config.CREATURE_FRONTIER_CLUSTER_SIZE_WEIGHT \
-		+ alignment_score * Config.CREATURE_FRONTIER_ALIGNMENT_WEIGHT
-	return total
-
-func _local_frontier_total_score(
-	steps: int,
-	alignment_score: float,
-	frontier_utility: float,
-	same_cluster: bool
-) -> float:
-	var total := \
-		frontier_utility * FRONTIER_UTILITY_WEIGHT \
-		- float(steps) * Config.CREATURE_FRONTIER_PATH_COST_WEIGHT \
-		+ alignment_score * LOCAL_ALIGNMENT_WEIGHT
-	if same_cluster:
-		total += LOCAL_SELECTED_CLUSTER_BONUS
-	return total
-
-func _frontier_score_components(
-	frontier_cell: Vector2i,
-	snapshot: Dictionary
+func _traversal_plan_from_candidate(
+	snapshot: Dictionary,
+	reachability: Dictionary,
+	origin_cell: Vector2i,
+	candidate: Dictionary
 ) -> Dictionary:
-	var utility_lookup: Dictionary = snapshot.get("frontier_utility_by_cell", {})
-	return utility_lookup.get(frontier_cell, {
-		"external_distance": 999999,
-		"cavity_proximity_score": 0.0,
-		"breakthrough_value": 0.0,
-		"connection_value": 0.0,
-		"dead_end_risk": 1.0,
-		"frontier_utility": 0.0,
-	})
+	var staging_cell: Vector2i = candidate.get("staging_cell", Vector2i(-1, -1))
+	if staging_cell.x < 0:
+		return {}
+	var path_cells := cave_analysis.reconstruct_path(reachability, origin_cell, staging_cell)
+	if path_cells.is_empty():
+		return {}
+	return {
+		"revision": world.revision,
+		"region_id_anchor": snapshot.get("region_id_anchor", Vector2i(-1, -1)),
+		"cluster_id": str(candidate.get("cluster_id", "")),
+		"staging_cell": staging_cell,
+		"path_cells": path_cells,
+		"path_index": 1 if path_cells.size() > 1 else 0,
+		"first_frontier_cell": candidate.get("frontier_cell", Vector2i(-1, -1)),
+		"dig_direction": candidate.get("dig_direction", Vector2i.RIGHT),
+		"path_cost": int(candidate.get("path_cost", 0)),
+		"continuity_score": float(candidate.get("continuity_score", 0.0)),
+		"depth_score": float(candidate.get("depth_score", 0.0)),
+		"sensor_hollow_score": float(candidate.get("sensor_hollow_score", 0.0)),
+		"sensor_open_span_score": float(candidate.get("sensor_open_span_score", 0.0)),
+		"parallel_risk": float(candidate.get("parallel_risk", 0.0)),
+		"niche_risk": float(candidate.get("niche_risk", 0.0)),
+		"scrape_penalty": float(candidate.get("scrape_penalty", 0.0)),
+		"build_score": float(candidate.get("build_score", 0.0)),
+		"sensor_score": float(candidate.get("sensor_score", 0.0)),
+		"crowding_penalty": float(candidate.get("crowding_penalty", 0.0)),
+		"path_cost_penalty": float(candidate.get("path_cost_penalty", 0.0)),
+		"selection_weight": float(candidate.get("selection_weight", 0.0)),
+		"filter_reason": str(candidate.get("filter_reason", "")),
+		"total_score": float(candidate.get("total_score", 0.0)),
+		"origin_region_lookup": snapshot.get("region_lookup", {}),
+	}
 
 func _cluster_crowding_penalty(cluster_id: String) -> float:
 	if unit_manager == null or cluster_id.is_empty():
 		return 0.0
+	# v1 keeps the old cluster-level crowding as a coarse soft claim only.
 	return float(unit_manager.cluster_claim_count(cluster_id, self)) * CLUSTER_CROWDING_PENALTY
 
-func _record_frontier_score(frontier_scores: Dictionary, candidate: Dictionary) -> void:
-	var frontier_cell: Vector2i = candidate.get("first_frontier_cell", Vector2i(-1, -1))
-	if frontier_cell.x < 0:
-		return
-	if not frontier_scores.has(frontier_cell):
-		frontier_scores[frontier_cell] = candidate
-		return
-	var incumbent: Dictionary = frontier_scores[frontier_cell]
-	if float(candidate.get("total_score", -INF)) > float(incumbent.get("total_score", -INF)):
-		frontier_scores[frontier_cell] = candidate
-
-func _update_frontier_debug_scores(frontier_scores: Dictionary, selected_plan: Dictionary) -> void:
+func _update_frontier_debug_scores(planner_result: Dictionary) -> void:
 	_frontier_debug_entries.clear()
 	_frontier_debug_min_score = 0.0
 	_frontier_debug_max_score = 1.0
-	var utility_lookup: Dictionary = _current_snapshot.get("frontier_utility_by_cell", {})
-	if frontier_scores.is_empty() and utility_lookup.is_empty():
+	if planner_result.is_empty():
 		return
-
-	var min_score := INF
-	var max_score := -INF
-	var selected_frontier_cell: Vector2i = selected_plan.get("first_frontier_cell", Vector2i(-1, -1))
-	var entries_by_cell: Dictionary = {}
-	var cluster_ids_by_frontier := _snapshot_cluster_ids_by_frontier(_current_snapshot)
-	for frontier_cell_variant in utility_lookup.keys():
-		var frontier_cell: Vector2i = frontier_cell_variant
-		var utility_data: Dictionary = utility_lookup[frontier_cell]
-		entries_by_cell[frontier_cell] = {
-			"cell": frontier_cell,
-			"score": float(utility_data.get("frontier_utility", 0.0)),
-			"cluster_id": str(cluster_ids_by_frontier.get(frontier_cell, "")),
-			"is_selected": frontier_cell == selected_frontier_cell,
-		}
-	for frontier_cell_variant in frontier_scores.keys():
-		var frontier_cell: Vector2i = frontier_cell_variant
-		var candidate: Dictionary = frontier_scores[frontier_cell]
-		var entry: Dictionary = entries_by_cell.get(frontier_cell, {
-			"cell": frontier_cell,
-			"cluster_id": str(candidate.get("cluster_id", "")),
-			"is_selected": frontier_cell == selected_frontier_cell,
-		})
-		entry["score"] = float(candidate.get("total_score", entry.get("score", 0.0)))
-		entry["cluster_id"] = str(candidate.get("cluster_id", entry.get("cluster_id", "")))
-		entry["is_selected"] = frontier_cell == selected_frontier_cell
-		entries_by_cell[frontier_cell] = entry
-
-	for entry_variant in entries_by_cell.values():
-		var entry: Dictionary = entry_variant
-		var score := float(entry.get("score", 0.0))
-		min_score = minf(min_score, score)
-		max_score = maxf(max_score, score)
-		_frontier_debug_entries.append(entry)
-
-	_frontier_debug_entries.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
-		return _is_cell_before(
-			a.get("cell", Vector2i.ZERO),
-			b.get("cell", Vector2i.ZERO)
-		)
-	)
-	_frontier_debug_min_score = min_score
-	_frontier_debug_max_score = max_score
-
-func _snapshot_cluster_ids_by_frontier(snapshot: Dictionary) -> Dictionary:
-	var cluster_ids: Dictionary = {}
-	for cluster in _snapshot_frontier_clusters_from(snapshot):
-		var cluster_id := str(cluster.get("cluster_id", ""))
-		for frontier_cell in _cluster_frontier_cells(cluster):
-			cluster_ids[frontier_cell] = cluster_id
-	return cluster_ids
+	var entries_variant = planner_result.get("entries", [])
+	for entry_variant in entries_variant:
+		_frontier_debug_entries.append(entry_variant)
+	_frontier_debug_min_score = float(planner_result.get("min_score", 0.0))
+	_frontier_debug_max_score = float(planner_result.get("max_score", 1.0))
 
 func _clear_frontier_debug_scores() -> void:
 	_frontier_debug_entries.clear()
@@ -796,109 +658,23 @@ func _find_local_frontier_option(origin_cell: Vector2i, max_steps: int) -> Dicti
 	var snapshot: Dictionary = cave_analysis.get_region_snapshot(origin_cell)
 	if snapshot.is_empty():
 		return {}
-
-	var selected_cluster_id := str(_traversal_plan.get("cluster_id", ""))
-	var cluster_by_frontier: Dictionary = {}
-	for cluster in _snapshot_frontier_clusters_from(snapshot):
-		var cluster_id := str(cluster.get("cluster_id", ""))
-		var frontier_lookup: Dictionary = cluster.get("frontier_lookup", {})
-		for frontier_cell_variant in frontier_lookup.keys():
-			var frontier_cell: Vector2i = frontier_cell_variant
-			cluster_by_frontier[frontier_cell] = cluster_id
-
-	var region_lookup: Dictionary = snapshot.get("region_lookup", {})
-	if not region_lookup.has(origin_cell) or not _is_navigable_cell(origin_cell):
+	var reachability: Dictionary = _build_navigation_reachability(snapshot, origin_cell)
+	var planner_result := _planner_result(snapshot, reachability, origin_cell, max_steps)
+	var selected_candidate: Dictionary = planner_result.get("selected_candidate", {})
+	if selected_candidate.is_empty():
 		return {}
-
-	var frontier_scores: Dictionary = {}
-	var distance: Dictionary = {origin_cell: 0}
-	var queue: Array[Vector2i] = [origin_cell]
-	var queue_index := 0
-	var best_option: Dictionary = {}
-
-	while queue_index < queue.size():
-		var head_cell: Vector2i = queue[queue_index]
-		queue_index += 1
-		var steps := int(distance.get(head_cell, 0))
-		if steps > max_steps:
-			continue
-
-		for direction in CARDINAL_DIRS:
-			var frontier_cell: Vector2i = head_cell + direction
-			if not world.is_frontier_earth_block(frontier_cell):
-				continue
-			var candidate := {
-				"snapshot": snapshot,
-				"head_cell": head_cell,
-				"frontier_cell": frontier_cell,
-				"cluster_id": str(cluster_by_frontier.get(frontier_cell, "")),
-				"steps": steps,
-				"alignment": float(direction.x * _dig_direction.x + direction.y * _dig_direction.y),
-			}
-			var score_components := _frontier_score_components(frontier_cell, snapshot)
-			candidate["cavity_proximity_score"] = float(score_components.get("cavity_proximity_score", 0.0))
-			candidate["breakthrough_value"] = float(score_components.get("breakthrough_value", 0.0))
-			candidate["connection_value"] = float(score_components.get("connection_value", 0.0))
-			candidate["dead_end_risk"] = float(score_components.get("dead_end_risk", 1.0))
-			candidate["frontier_utility"] = float(score_components.get("frontier_utility", 0.0))
-			candidate["external_distance"] = int(score_components.get("external_distance", 999999))
-			var same_cluster := str(candidate.get("cluster_id", "")) == selected_cluster_id
-			var crowding_penalty := _cluster_crowding_penalty(str(candidate.get("cluster_id", "")))
-			candidate["crowding_penalty"] = crowding_penalty
-			candidate["score"] = _local_frontier_total_score(
-				steps,
-				float(candidate.get("alignment", 0.0)),
-				float(candidate.get("frontier_utility", 0.0)),
-				same_cluster
-			) - crowding_penalty
-			candidate["total_score"] = candidate["score"]
-			candidate["first_frontier_cell"] = frontier_cell
-			_record_frontier_score(frontier_scores, candidate)
-			if _is_better_local_frontier_option(candidate, best_option):
-				best_option = candidate
-
-		if steps >= max_steps:
-			continue
-		for direction in CARDINAL_DIRS:
-			var next_cell: Vector2i = head_cell + direction
-			if not region_lookup.has(next_cell):
-				continue
-			if distance.has(next_cell):
-				continue
-			if not _is_navigable_cell(next_cell):
-				continue
-			distance[next_cell] = steps + 1
-			queue.append(next_cell)
-
-	if not frontier_scores.is_empty():
-		var selected_plan := {}
-		if not best_option.is_empty():
-			selected_plan = {"first_frontier_cell": best_option.get("frontier_cell", Vector2i(-1, -1))}
-		_update_frontier_debug_scores(frontier_scores, selected_plan)
-	return best_option
-
-func _is_better_local_frontier_option(candidate: Dictionary, incumbent: Dictionary) -> bool:
-	if incumbent.is_empty():
-		return true
-
-	var candidate_score := float(candidate.get("score", -INF))
-	var incumbent_score := float(incumbent.get("score", -INF))
-	if not is_equal_approx(candidate_score, incumbent_score):
-		return candidate_score > incumbent_score
-
-	var candidate_steps := int(candidate.get("steps", 999999))
-	var incumbent_steps := int(incumbent.get("steps", 999999))
-	if candidate_steps != incumbent_steps:
-		return candidate_steps < incumbent_steps
-
-	var candidate_alignment := float(candidate.get("alignment", -INF))
-	var incumbent_alignment := float(incumbent.get("alignment", -INF))
-	if not is_equal_approx(candidate_alignment, incumbent_alignment):
-		return candidate_alignment > incumbent_alignment
-
-	var candidate_frontier: Vector2i = candidate.get("frontier_cell", Vector2i(-1, -1))
-	var incumbent_frontier: Vector2i = incumbent.get("frontier_cell", Vector2i(-1, -1))
-	return _is_cell_before(candidate_frontier, incumbent_frontier)
+	var path_cells := cave_analysis.reconstruct_path(
+		reachability,
+		origin_cell,
+		selected_candidate.get("staging_cell", Vector2i(-1, -1))
+	)
+	if path_cells.is_empty():
+		return {}
+	var option := selected_candidate.duplicate()
+	option["snapshot"] = snapshot
+	option["head_cell"] = option.get("staging_cell", Vector2i(-1, -1))
+	option["path_cells"] = path_cells
+	return option
 
 func _commit_local_frontier_option(option: Dictionary) -> void:
 	var snapshot: Dictionary = option.get("snapshot", {})
@@ -912,25 +688,31 @@ func _commit_local_frontier_option(option: Dictionary) -> void:
 	if head_cell.x >= 0:
 		_traversal_plan["staging_cell"] = head_cell
 		_move_target_cell = head_cell
-		_traversal_plan["path_cells"] = [head_cell]
-		_traversal_plan["path_index"] = 0
-		_current_path_index = 0
+		var path_cells = option.get("path_cells", [head_cell])
+		_traversal_plan["path_cells"] = path_cells
+		_traversal_plan["path_index"] = 1 if path_cells.size() > 1 else 0
+		_current_path_index = int(_traversal_plan["path_index"])
 	if frontier_cell.x >= 0:
 		_traversal_plan["first_frontier_cell"] = frontier_cell
 		var dig_direction: Vector2i = frontier_cell - head_cell
 		if dig_direction != Vector2i.ZERO:
 			_traversal_plan["dig_direction"] = dig_direction
-		var score_components := _frontier_score_components(frontier_cell, _current_snapshot)
-		_traversal_plan["cavity_proximity_score"] = float(score_components.get("cavity_proximity_score", 0.0))
-		_traversal_plan["breakthrough_value"] = float(score_components.get("breakthrough_value", 0.0))
-		_traversal_plan["connection_value"] = float(score_components.get("connection_value", 0.0))
-		_traversal_plan["dead_end_risk"] = float(score_components.get("dead_end_risk", 1.0))
-		_traversal_plan["frontier_utility"] = float(score_components.get("frontier_utility", 0.0))
+		_traversal_plan["continuity_score"] = float(option.get("continuity_score", 0.0))
+		_traversal_plan["depth_score"] = float(option.get("depth_score", 0.0))
+		_traversal_plan["sensor_hollow_score"] = float(option.get("sensor_hollow_score", 0.0))
+		_traversal_plan["sensor_open_span_score"] = float(option.get("sensor_open_span_score", 0.0))
+		_traversal_plan["parallel_risk"] = float(option.get("parallel_risk", 0.0))
+		_traversal_plan["niche_risk"] = float(option.get("niche_risk", 0.0))
+		_traversal_plan["scrape_penalty"] = float(option.get("scrape_penalty", 0.0))
+		_traversal_plan["build_score"] = float(option.get("build_score", 0.0))
+		_traversal_plan["sensor_score"] = float(option.get("sensor_score", 0.0))
 		_traversal_plan["crowding_penalty"] = float(option.get("crowding_penalty", 0.0))
-		_traversal_plan["external_distance"] = int(score_components.get("external_distance", 999999))
-	var cluster_id := str(option.get("cluster_id", ""))
-	if not cluster_id.is_empty():
-		_traversal_plan["cluster_id"] = cluster_id
+		_traversal_plan["path_cost_penalty"] = float(option.get("path_cost_penalty", 0.0))
+		_traversal_plan["selection_weight"] = float(option.get("selection_weight", 0.0))
+		_traversal_plan["filter_reason"] = str(option.get("filter_reason", ""))
+		_traversal_plan["total_score"] = float(option.get("total_score", 0.0))
+		_traversal_plan["path_cost"] = int(option.get("path_cost", 0))
+	_traversal_plan["cluster_id"] = str(option.get("cluster_id", ""))
 
 func _adopt_local_dig_option(option: Dictionary) -> void:
 	var head_cell: Vector2i = option.get("head_cell", Vector2i(-1, -1))
@@ -983,21 +765,11 @@ func _choose_next_dig_cell() -> Vector2i:
 		head_cell = _traversal_plan.get("staging_cell", Vector2i(-1, -1))
 	if head_cell.x < 0:
 		return Vector2i(-1, -1)
-
-	var best_cell := Vector2i(-1, -1)
-	var best_alignment := -INF
-	for direction in CARDINAL_DIRS:
-		var candidate: Vector2i = head_cell + direction
-		if not world.is_frontier_earth_block(candidate):
-			continue
-		var alignment := float(direction.x * _dig_direction.x + direction.y * _dig_direction.y)
-		if alignment > best_alignment:
-			best_alignment = alignment
-			best_cell = candidate
-			continue
-		if is_equal_approx(alignment, best_alignment) and _is_cell_before(candidate, best_cell):
-			best_cell = candidate
-	return best_cell
+	var option := _find_local_frontier_option(head_cell, 0)
+	if option.is_empty():
+		return Vector2i(-1, -1)
+	_commit_local_frontier_option(option)
+	return option.get("frontier_cell", Vector2i(-1, -1))
 
 func _has_broken_through() -> bool:
 	var origin_region_lookup: Dictionary = _traversal_plan.get("origin_region_lookup", {})

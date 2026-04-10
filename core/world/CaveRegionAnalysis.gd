@@ -9,15 +9,11 @@ const CARDINAL_DIRS: Array[Vector2i] = [
 	Vector2i.LEFT,
 	Vector2i.UP,
 ]
-const FRONTIER_CAVITY_DISTANCE_MAX := 18
-const FRONTIER_DIRECTION_SCAN_LATERAL_MAX := 3
-const FRONTIER_BREAKTHROUGH_DEPTH := 3
-const FRONTIER_BREAKTHROUGH_LOOKAHEAD := 4
-const FRONTIER_BREAKTHROUGH_LATERAL_RANGE := 2
-const FRONTIER_CAVITY_WEIGHT := 0.45
-const FRONTIER_BREAKTHROUGH_WEIGHT := 0.95
-const FRONTIER_CONNECTION_WEIGHT := 0.70
-const FRONTIER_DEAD_END_WEIGHT := 0.85
+const FRONTIER_DEPTH_FORWARD_MAX := 7
+const FRONTIER_DEPTH_LATERAL_RANGE := 1
+const FRONTIER_SENSOR_DISTANCE_MAX := 6
+const FRONTIER_SENSOR_LATERAL_MAX := 2
+const FRONTIER_PARALLEL_FORWARD_MAX := 5
 
 var world: WorldModel = null
 var _cached_revision := -1
@@ -156,8 +152,8 @@ func _build_snapshot(origin_cell: Vector2i) -> Dictionary:
 			var staging_lookup: Dictionary = frontier_staging_by_cell[neighbor]
 			staging_lookup[cell] = true
 
-	var frontier_utility_by_cell: Dictionary = _build_frontier_utility(region_lookup, frontier_staging_by_cell)
-	var frontier_clusters: Array[Dictionary] = _build_frontier_clusters(frontier_staging_by_cell, frontier_utility_by_cell)
+	var frontier_metrics_by_cell: Dictionary = _build_frontier_metrics(region_lookup, frontier_staging_by_cell)
+	var frontier_clusters: Array[Dictionary] = _build_frontier_clusters(frontier_staging_by_cell, frontier_metrics_by_cell)
 	var boundary_cells: Array[Vector2i] = _sorted_cells_from_lookup(boundary_lookup)
 
 	return {
@@ -168,11 +164,11 @@ func _build_snapshot(origin_cell: Vector2i) -> Dictionary:
 		"region_size": region_cells.size(),
 		"boundary_cells": boundary_cells,
 		"boundary_lookup": boundary_lookup,
-		"frontier_utility_by_cell": frontier_utility_by_cell,
+		"frontier_metrics_by_cell": frontier_metrics_by_cell,
 		"frontier_clusters": frontier_clusters,
 	}
 
-func _build_frontier_clusters(frontier_staging_by_cell: Dictionary, frontier_utility_by_cell: Dictionary) -> Array[Dictionary]:
+func _build_frontier_clusters(frontier_staging_by_cell: Dictionary, frontier_metrics_by_cell: Dictionary) -> Array[Dictionary]:
 	var frontier_lookup: Dictionary = {}
 	for frontier_cell_variant in frontier_staging_by_cell.keys():
 		var frontier_cell: Vector2i = frontier_cell_variant
@@ -191,8 +187,8 @@ func _build_frontier_clusters(frontier_staging_by_cell: Dictionary, frontier_uti
 		var staging_lookup: Dictionary = {}
 		var cluster_anchor: Vector2i = frontier_cell
 		var centroid_acc: Vector2 = Vector2.ZERO
-		var best_frontier_utility := 0.0
-		var best_external_distance := FRONTIER_CAVITY_DISTANCE_MAX + 1
+		var best_depth_score := 0.0
+		var best_sensor_score := 0.0
 
 		visited[frontier_cell] = true
 		cluster_lookup[frontier_cell] = true
@@ -203,11 +199,15 @@ func _build_frontier_clusters(frontier_staging_by_cell: Dictionary, frontier_uti
 			centroid_acc += Vector2(float(current.x), float(current.y))
 			if _is_cell_before(current, cluster_anchor):
 				cluster_anchor = current
-			var utility_data: Dictionary = frontier_utility_by_cell.get(current, {})
-			var frontier_utility := float(utility_data.get("frontier_utility", 0.0))
-			var external_distance := int(utility_data.get("external_distance", FRONTIER_CAVITY_DISTANCE_MAX + 1))
-			best_frontier_utility = maxf(best_frontier_utility, frontier_utility)
-			best_external_distance = mini(best_external_distance, external_distance)
+
+			var metrics_variant = frontier_metrics_by_cell.get(current, [])
+			for metric_variant in metrics_variant:
+				var metric: Dictionary = metric_variant
+				best_depth_score = maxf(best_depth_score, float(metric.get("depth_score", 0.0)))
+				best_sensor_score = maxf(
+					best_sensor_score,
+					float(metric.get("sensor_hollow_score", 0.0)) + float(metric.get("sensor_open_span_score", 0.0))
+				)
 
 			var local_staging_lookup: Dictionary = frontier_staging_by_cell.get(current, {})
 			for staging_cell_variant in local_staging_lookup.keys():
@@ -236,8 +236,8 @@ func _build_frontier_clusters(frontier_staging_by_cell: Dictionary, frontier_uti
 			"staging_lookup": staging_lookup,
 			"centroid": centroid,
 			"size": frontier_cells.size(),
-			"best_frontier_utility": best_frontier_utility,
-			"best_external_distance": best_external_distance,
+			"best_depth_score": best_depth_score,
+			"best_sensor_score": best_sensor_score,
 		})
 
 	clusters.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
@@ -258,127 +258,163 @@ func _sorted_cells_from_lookup(lookup: Dictionary) -> Array[Vector2i]:
 	)
 	return cells
 
-func _build_frontier_utility(region_lookup: Dictionary, frontier_staging_by_cell: Dictionary) -> Dictionary:
-	var utility_by_cell: Dictionary = {}
+func _build_frontier_metrics(region_lookup: Dictionary, frontier_staging_by_cell: Dictionary) -> Dictionary:
+	var metrics_by_cell: Dictionary = {}
 	for frontier_cell_variant in frontier_staging_by_cell.keys():
 		var frontier_cell: Vector2i = frontier_cell_variant
-		var best_metrics := {
-			"external_distance": FRONTIER_CAVITY_DISTANCE_MAX + 1,
-			"cavity_proximity_score": 0.0,
-			"breakthrough_value": 0.0,
-			"connection_value": 0.0,
-			"dead_end_risk": 1.0,
-			"frontier_utility": -INF,
-		}
+		var metrics: Array[Dictionary] = []
 		var staging_lookup: Dictionary = frontier_staging_by_cell.get(frontier_cell, {})
 		for staging_cell_variant in staging_lookup.keys():
 			var staging_cell: Vector2i = staging_cell_variant
 			var dig_direction: Vector2i = frontier_cell - staging_cell
 			if dig_direction == Vector2i.ZERO:
 				continue
-			var metrics := _evaluate_frontier_direction(frontier_cell, dig_direction, region_lookup)
-			if float(metrics.get("frontier_utility", -INF)) > float(best_metrics.get("frontier_utility", -INF)):
-				best_metrics = metrics
-		if float(best_metrics.get("frontier_utility", -INF)) == -INF:
-			best_metrics["frontier_utility"] = 0.0
-		utility_by_cell[frontier_cell] = best_metrics
-	return utility_by_cell
+			var metric := _evaluate_frontier_direction(frontier_cell, staging_cell, dig_direction, region_lookup)
+			metric["frontier_cell"] = frontier_cell
+			metric["staging_cell"] = staging_cell
+			metric["dig_direction"] = dig_direction
+			metrics.append(metric)
+		metrics_by_cell[frontier_cell] = metrics
+	return metrics_by_cell
 
-func _evaluate_frontier_direction(frontier_cell: Vector2i, dig_direction: Vector2i, region_lookup: Dictionary) -> Dictionary:
-	var cavity_scan := _scan_external_space(frontier_cell, dig_direction, region_lookup, FRONTIER_CAVITY_DISTANCE_MAX)
-	var external_distance := int(cavity_scan.get("nearest_distance", FRONTIER_CAVITY_DISTANCE_MAX + 1))
-	var cavity_proximity_score := _distance_to_proximity_score(external_distance)
-
-	var breakthrough_value := 0.0
-	var connection_value := 0.0
-	var dead_end_risk := 1.0
-	for depth in range(1, FRONTIER_BREAKTHROUGH_DEPTH + 1):
-		var probe_head: Vector2i = frontier_cell + dig_direction * depth
-		var probe_metrics := _probe_breakthrough_window(probe_head, dig_direction, region_lookup)
-		breakthrough_value = maxf(breakthrough_value, float(probe_metrics.get("breakthrough_value", 0.0)))
-		connection_value = maxf(connection_value, float(probe_metrics.get("connection_value", 0.0)))
-		dead_end_risk = minf(dead_end_risk, float(probe_metrics.get("dead_end_risk", 1.0)))
-
-	var frontier_utility := \
-		cavity_proximity_score * FRONTIER_CAVITY_WEIGHT \
-		+ breakthrough_value * FRONTIER_BREAKTHROUGH_WEIGHT \
-		+ connection_value * FRONTIER_CONNECTION_WEIGHT \
-		- dead_end_risk * FRONTIER_DEAD_END_WEIGHT
-	frontier_utility = clampf(frontier_utility, 0.0, 1.0)
+func _evaluate_frontier_direction(
+	frontier_cell: Vector2i,
+	staging_cell: Vector2i,
+	dig_direction: Vector2i,
+	region_lookup: Dictionary
+) -> Dictionary:
+	var sensor_metrics := _scan_external_sensor(frontier_cell, dig_direction, region_lookup)
+	var depth_score := _scan_depth_corridor(frontier_cell, dig_direction)
+	var scrape_penalty := _scrape_penalty(frontier_cell, region_lookup)
+	var parallel_risk := _scan_parallel_tunnel(frontier_cell, dig_direction)
+	var continuation_count := _count_forward_earth_options(frontier_cell, staging_cell)
+	var sensor_hollow_score := float(sensor_metrics.get("sensor_hollow_score", 0.0))
+	var sensor_open_span_score := float(sensor_metrics.get("sensor_open_span_score", 0.0))
+	var niche_risk := _niche_risk(continuation_count, depth_score, sensor_hollow_score, sensor_open_span_score)
 
 	return {
-		"external_distance": external_distance,
-		"cavity_proximity_score": cavity_proximity_score,
-		"breakthrough_value": breakthrough_value,
-		"connection_value": connection_value,
-		"dead_end_risk": dead_end_risk,
-		"frontier_utility": frontier_utility,
+		"depth_score": depth_score,
+		"sensor_hollow_score": sensor_hollow_score,
+		"sensor_open_span_score": sensor_open_span_score,
+		"parallel_risk": parallel_risk,
+		"niche_risk": niche_risk,
+		"scrape_penalty": scrape_penalty,
+		"continuation_count": continuation_count,
 	}
 
-func _scan_external_space(frontier_cell: Vector2i, dig_direction: Vector2i, region_lookup: Dictionary, max_distance: int) -> Dictionary:
+func _scan_depth_corridor(frontier_cell: Vector2i, dig_direction: Vector2i) -> float:
 	var perpendicular := Vector2i(dig_direction.y, -dig_direction.x)
-	var nearest_distance := max_distance + 1
-	var weighted_hits := 0.0
-	var side_hits: Dictionary = {}
-	for step in range(1, max_distance + 1):
+	var weighted_earth := 0.0
+	var max_weight := 0.0
+	for step in range(1, FRONTIER_DEPTH_FORWARD_MAX + 1):
 		var base_cell := frontier_cell + dig_direction * step
-		var lateral_limit := mini(FRONTIER_DIRECTION_SCAN_LATERAL_MAX, 1 + int(step / 5))
-		for lateral in range(-lateral_limit, lateral_limit + 1):
-			var sample_cell := base_cell + perpendicular * lateral
-			if not _is_external_empty_cell(sample_cell, region_lookup):
-				continue
-			nearest_distance = mini(nearest_distance, step)
-			var distance_weight := 1.0 - (float(step - 1) / float(max_distance))
-			var lateral_weight := 1.0 - (absf(float(lateral)) / float(lateral_limit + 1))
-			weighted_hits += distance_weight * (0.3 + 0.7 * lateral_weight)
-			side_hits[_lateral_bucket(lateral)] = true
-	return {
-		"nearest_distance": nearest_distance,
-		"weighted_hits": weighted_hits,
-		"side_count": side_hits.size(),
-	}
+		if not world.is_in_bounds(base_cell.x, base_cell.y):
+			break
+		var forward_weight := 1.0 - (float(step - 1) / float(FRONTIER_DEPTH_FORWARD_MAX))
+		max_weight += forward_weight
+		if world.get_material(base_cell.x, base_cell.y) != MaterialType.Id.EARTH:
+			break
+		weighted_earth += forward_weight
+		for lateral in range(1, FRONTIER_DEPTH_LATERAL_RANGE + 1):
+			var lateral_weight := forward_weight * (0.55 - float(lateral - 1) * 0.15)
+			for sign in [-1, 1]:
+				var sample_cell := base_cell + perpendicular * lateral * sign
+				max_weight += lateral_weight
+				if not world.is_in_bounds(sample_cell.x, sample_cell.y):
+					continue
+				if world.get_material(sample_cell.x, sample_cell.y) == MaterialType.Id.EARTH:
+					weighted_earth += lateral_weight
+	return clampf(weighted_earth / maxf(max_weight, 0.001), 0.0, 1.0)
 
-func _probe_breakthrough_window(probe_head: Vector2i, dig_direction: Vector2i, region_lookup: Dictionary) -> Dictionary:
+func _scan_external_sensor(frontier_cell: Vector2i, dig_direction: Vector2i, region_lookup: Dictionary) -> Dictionary:
 	var perpendicular := Vector2i(dig_direction.y, -dig_direction.x)
-	var weighted_hits := 0.0
-	var hit_count := 0
-	var side_hits: Dictionary = {}
+	var nearest_distance := FRONTIER_SENSOR_DISTANCE_MAX + 1
+	var open_hit_count := 0
 	var max_samples := 0
-	for forward in range(FRONTIER_BREAKTHROUGH_LOOKAHEAD + 1):
-		var base_cell := probe_head + dig_direction * forward
-		for lateral in range(-FRONTIER_BREAKTHROUGH_LATERAL_RANGE, FRONTIER_BREAKTHROUGH_LATERAL_RANGE + 1):
+	var lateral_buckets: Dictionary = {}
+	for step in range(1, FRONTIER_SENSOR_DISTANCE_MAX + 1):
+		var base_cell := frontier_cell + dig_direction * step
+		var lateral_limit := mini(FRONTIER_SENSOR_LATERAL_MAX, 1 + int((step - 1) / 2))
+		for lateral in range(-lateral_limit, lateral_limit + 1):
 			max_samples += 1
 			var sample_cell := base_cell + perpendicular * lateral
 			if not _is_external_empty_cell(sample_cell, region_lookup):
 				continue
-			hit_count += 1
-			var forward_weight := 1.0 - (float(forward) / float(FRONTIER_BREAKTHROUGH_LOOKAHEAD + 1))
-			var lateral_weight := 1.0 - (absf(float(lateral)) / float(FRONTIER_BREAKTHROUGH_LATERAL_RANGE + 1))
-			weighted_hits += forward_weight * (0.35 + 0.65 * lateral_weight)
-			side_hits[_lateral_bucket(lateral)] = true
-
-	var breakthrough_value := clampf(weighted_hits / 8.5, 0.0, 1.0)
-	var connection_value := 0.0
-	if hit_count > 0:
-		var side_factor := clampf(float(side_hits.size() - 1) / 2.0, 0.0, 1.0)
-		var density := clampf(float(hit_count) / float(maxi(max_samples, 1)), 0.0, 1.0)
-		connection_value = clampf(0.55 * side_factor + 0.45 * density, 0.0, 1.0) * breakthrough_value
-
-	var dead_end_risk := 1.0
-	if hit_count > 0:
-		var openness := clampf(0.75 * breakthrough_value + 0.25 * connection_value, 0.0, 1.0)
-		dead_end_risk = clampf(1.0 - openness, 0.0, 1.0)
-
+			open_hit_count += 1
+			nearest_distance = mini(nearest_distance, step)
+			lateral_buckets[_lateral_bucket(lateral)] = true
+	var sensor_hollow_score := _distance_to_score(nearest_distance, FRONTIER_SENSOR_DISTANCE_MAX)
+	var sensor_open_span_score := 0.0
+	if open_hit_count > 0:
+		var density := clampf(float(open_hit_count) / float(maxi(max_samples, 1)), 0.0, 1.0)
+		var span := clampf(float(lateral_buckets.size() - 1) / 2.0, 0.0, 1.0)
+		sensor_open_span_score = clampf(0.60 * density + 0.40 * span, 0.0, 1.0)
 	return {
-		"breakthrough_value": breakthrough_value,
-		"connection_value": connection_value,
-		"dead_end_risk": dead_end_risk,
+		"sensor_hollow_score": sensor_hollow_score,
+		"sensor_open_span_score": sensor_open_span_score,
 	}
 
-func _distance_to_proximity_score(external_distance: int) -> float:
-	if external_distance > FRONTIER_CAVITY_DISTANCE_MAX:
+func _scan_parallel_tunnel(frontier_cell: Vector2i, dig_direction: Vector2i) -> float:
+	var perpendicular := Vector2i(dig_direction.y, -dig_direction.x)
+	var weighted_hits := 0.0
+	var max_weight := 0.0
+	for step in range(FRONTIER_PARALLEL_FORWARD_MAX):
+		var corridor_cell := frontier_cell + dig_direction * step
+		var forward_weight := 1.0 - (float(step) / float(FRONTIER_PARALLEL_FORWARD_MAX))
+		for sign in [-1, 1]:
+			max_weight += forward_weight
+			var wall_cell := corridor_cell + perpendicular * sign
+			var open_cell := corridor_cell + perpendicular * sign * 2
+			if not world.is_in_bounds(wall_cell.x, wall_cell.y):
+				continue
+			if not world.is_in_bounds(open_cell.x, open_cell.y):
+				continue
+			if world.get_material(wall_cell.x, wall_cell.y) != MaterialType.Id.EARTH:
+				continue
+			if world.get_material(open_cell.x, open_cell.y) != MaterialType.Id.EMPTY:
+				continue
+			weighted_hits += forward_weight
+	return clampf(weighted_hits / maxf(max_weight, 0.001), 0.0, 1.0)
+
+func _scrape_penalty(frontier_cell: Vector2i, region_lookup: Dictionary) -> float:
+	var region_open_neighbors := 0
+	for direction in CARDINAL_DIRS:
+		var neighbor: Vector2i = frontier_cell + direction
+		if region_lookup.has(neighbor):
+			region_open_neighbors += 1
+	return clampf(float(region_open_neighbors - 1) / 2.0, 0.0, 1.0)
+
+func _count_forward_earth_options(frontier_cell: Vector2i, staging_cell: Vector2i) -> int:
+	var count := 0
+	for direction in CARDINAL_DIRS:
+		var neighbor: Vector2i = frontier_cell + direction
+		if neighbor == staging_cell:
+			continue
+		if not world.is_in_bounds(neighbor.x, neighbor.y):
+			continue
+		if world.get_material(neighbor.x, neighbor.y) == MaterialType.Id.EARTH:
+			count += 1
+	return count
+
+func _niche_risk(
+	continuation_count: int,
+	depth_score: float,
+	sensor_hollow_score: float,
+	sensor_open_span_score: float
+) -> float:
+	var sensor_strength := maxf(sensor_hollow_score, sensor_open_span_score)
+	if continuation_count <= 0:
+		if sensor_strength <= 0.05:
+			return 1.0
+		return 0.35
+	if continuation_count == 1 and depth_score < 0.25 and sensor_strength < 0.08:
+		return 0.55
+	return 0.0
+
+func _distance_to_score(distance: int, max_distance: int) -> float:
+	if distance > max_distance:
 		return 0.0
-	return 1.0 - (float(external_distance - 1) / float(FRONTIER_CAVITY_DISTANCE_MAX))
+	return 1.0 - (float(distance - 1) / float(max_distance))
 
 func _is_external_empty_cell(cell: Vector2i, region_lookup: Dictionary) -> bool:
 	if not world.is_in_bounds(cell.x, cell.y):
