@@ -3,16 +3,15 @@ class_name CameraController
 
 const Config = preload("res://core/Config.gd")
 
-var _target_zoom: float = 1.0
+var _zoom_index: int = Config.CAMERA_DEFAULT_ZOOM_INDEX
 
 func _ready() -> void:
 	make_current()
-	_target_zoom = zoom.x
+	_apply_zoom_level()
 
 func _process(delta: float) -> void:
 	_handle_movement(delta)
 	_handle_zoom_keys()
-	_update_zoom(delta)
 
 func _handle_movement(delta: float) -> void:
 	var dir := Vector2.ZERO
@@ -36,26 +35,24 @@ func _handle_movement(delta: float) -> void:
 
 func _handle_zoom_keys() -> void:
 	if Input.is_action_just_pressed(Config.ZOOM_IN_ACTION):
-		_apply_zoom(-Config.CAMERA_ZOOM_STEP)
+		_step_zoom(-1)
 	if Input.is_action_just_pressed(Config.ZOOM_OUT_ACTION):
-		_apply_zoom(Config.CAMERA_ZOOM_STEP)
+		_step_zoom(1)
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.pressed:
 		if event.button_index == MOUSE_BUTTON_WHEEL_UP:
-			_apply_zoom(-Config.CAMERA_MOUSE_WHEEL_ZOOM_STEP)
+			_step_zoom(-1)
 		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
-			_apply_zoom(Config.CAMERA_MOUSE_WHEEL_ZOOM_STEP)
+			_step_zoom(1)
 
-func _apply_zoom(delta_zoom: float) -> void:
-	_target_zoom = clampf(
-		_target_zoom + delta_zoom,
-		Config.CAMERA_ZOOM_MIN,
-		Config.CAMERA_ZOOM_MAX
-	)
+func _step_zoom(direction: int) -> void:
+	var next_index := clampi(_zoom_index + direction, 0, Config.CAMERA_ZOOM_LEVELS.size() - 1)
+	if next_index == _zoom_index:
+		return
+	_zoom_index = next_index
+	_apply_zoom_level()
 
-func _update_zoom(delta: float) -> void:
-	var current_zoom: float = zoom.x
-	var zoom_step: float = Config.CAMERA_ZOOM_SMOOTH_SPEED * delta
-	var next_zoom: float = move_toward(current_zoom, _target_zoom, zoom_step)
-	zoom = Vector2(next_zoom, next_zoom)
+func _apply_zoom_level() -> void:
+	var zoom_level: float = Config.CAMERA_ZOOM_LEVELS[_zoom_index]
+	zoom = Vector2(zoom_level, zoom_level)

@@ -24,7 +24,7 @@ func _ready() -> void:
 	add_child(_sprite)
 	_sprite.texture = _texture
 	_sprite.centered = false
-	_sprite.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
+	_sprite.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	_sprite.scale = Vector2(Config.CELL_SIZE, Config.CELL_SIZE)
 
 func setup(world_model: WorldModel) -> void:
@@ -32,6 +32,7 @@ func setup(world_model: WorldModel) -> void:
 	_image = Image.create(world.width, world.height, false, Image.FORMAT_RGBA8)
 	_texture = ImageTexture.create_from_image(_image)
 	_sprite.texture = _texture
+	_sprite.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	redraw_full()
 
 func redraw_full() -> void:
