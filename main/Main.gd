@@ -24,6 +24,10 @@ func _ready() -> void:
 	step_begin_ms = Time.get_ticks_msec()
 	_generate_world()
 	_startup_timings["world_generate_ms"] = Time.get_ticks_msec() - step_begin_ms
+	_startup_timings["world_generate_fill_ms"] = int(world_generator.last_profile.get("fill_ms", 0))
+	_startup_timings["world_generate_carve_ms"] = int(world_generator.last_profile.get("carve_ms", 0))
+	_startup_timings["world_generate_smooth_ms"] = int(world_generator.last_profile.get("smooth_ms", 0))
+	_startup_timings["world_generate_variants_ms"] = int(world_generator.last_profile.get("variants_ms", 0))
 
 	step_begin_ms = Time.get_ticks_msec()
 	_setup_renderer()

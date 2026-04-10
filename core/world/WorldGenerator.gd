@@ -5,14 +5,32 @@ const MaterialType = preload("res://core/MaterialType.gd")
 const CellFlags = preload("res://core/CellFlags.gd")
 const Config = preload("res://core/Config.gd")
 
+var last_profile := {}
+
 func generate(world: WorldModel) -> void:
+	var generate_begin_ms := Time.get_ticks_msec()
 	world.begin_bulk_update()
+
+	var step_begin_ms := Time.get_ticks_msec()
 	_fill_with_earth(world)
+	last_profile["fill_ms"] = Time.get_ticks_msec() - step_begin_ms
+
+	step_begin_ms = Time.get_ticks_msec()
 	_carve_noise_caves(world)
+	last_profile["carve_ms"] = Time.get_ticks_msec() - step_begin_ms
+
+	var smooth_total_ms := 0
 	for _i in Config.CAVE_SMOOTH_PASSES:
+		step_begin_ms = Time.get_ticks_msec()
 		_smooth_pass(world)
+		smooth_total_ms += Time.get_ticks_msec() - step_begin_ms
+	last_profile["smooth_ms"] = smooth_total_ms
+
+	step_begin_ms = Time.get_ticks_msec()
 	_apply_variants(world)
+	last_profile["variants_ms"] = Time.get_ticks_msec() - step_begin_ms
 	world.end_bulk_update()
+	last_profile["total_ms"] = Time.get_ticks_msec() - generate_begin_ms
 
 func _fill_with_earth(world: WorldModel) -> void:
 	var total_cells := world.width * world.height
