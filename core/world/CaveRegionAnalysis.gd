@@ -307,7 +307,7 @@ func _scan_depth_corridor(frontier_cell: Vector2i, dig_direction: Vector2i) -> f
 	var weighted_earth := 0.0
 	var max_weight := 0.0
 	for step in range(1, FRONTIER_DEPTH_FORWARD_MAX + 1):
-		var base_cell := frontier_cell + dig_direction * step
+		var base_cell: Vector2i = frontier_cell + dig_direction * step
 		if not world.is_in_bounds(base_cell.x, base_cell.y):
 			break
 		var forward_weight := 1.0 - (float(step - 1) / float(FRONTIER_DEPTH_FORWARD_MAX))
@@ -318,7 +318,7 @@ func _scan_depth_corridor(frontier_cell: Vector2i, dig_direction: Vector2i) -> f
 		for lateral in range(1, FRONTIER_DEPTH_LATERAL_RANGE + 1):
 			var lateral_weight := forward_weight * (0.55 - float(lateral - 1) * 0.15)
 			for sign in [-1, 1]:
-				var sample_cell := base_cell + perpendicular * lateral * sign
+				var sample_cell: Vector2i = base_cell + perpendicular * lateral * sign
 				max_weight += lateral_weight
 				if not world.is_in_bounds(sample_cell.x, sample_cell.y):
 					continue
@@ -333,11 +333,11 @@ func _scan_external_sensor(frontier_cell: Vector2i, dig_direction: Vector2i, reg
 	var max_samples := 0
 	var lateral_buckets: Dictionary = {}
 	for step in range(1, FRONTIER_SENSOR_DISTANCE_MAX + 1):
-		var base_cell := frontier_cell + dig_direction * step
+		var base_cell: Vector2i = frontier_cell + dig_direction * step
 		var lateral_limit := mini(FRONTIER_SENSOR_LATERAL_MAX, 1 + int((step - 1) / 2))
 		for lateral in range(-lateral_limit, lateral_limit + 1):
 			max_samples += 1
-			var sample_cell := base_cell + perpendicular * lateral
+			var sample_cell: Vector2i = base_cell + perpendicular * lateral
 			if not _is_external_empty_cell(sample_cell, region_lookup):
 				continue
 			open_hit_count += 1
@@ -359,12 +359,12 @@ func _scan_parallel_tunnel(frontier_cell: Vector2i, dig_direction: Vector2i) -> 
 	var weighted_hits := 0.0
 	var max_weight := 0.0
 	for step in range(FRONTIER_PARALLEL_FORWARD_MAX):
-		var corridor_cell := frontier_cell + dig_direction * step
+		var corridor_cell: Vector2i = frontier_cell + dig_direction * step
 		var forward_weight := 1.0 - (float(step) / float(FRONTIER_PARALLEL_FORWARD_MAX))
 		for sign in [-1, 1]:
 			max_weight += forward_weight
-			var wall_cell := corridor_cell + perpendicular * sign
-			var open_cell := corridor_cell + perpendicular * sign * 2
+			var wall_cell: Vector2i = corridor_cell + perpendicular * sign
+			var open_cell: Vector2i = corridor_cell + perpendicular * sign * 2
 			if not world.is_in_bounds(wall_cell.x, wall_cell.y):
 				continue
 			if not world.is_in_bounds(open_cell.x, open_cell.y):
