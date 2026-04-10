@@ -44,6 +44,25 @@ func _build_debug_text(cell: Vector2i) -> String:
 	lines.append("Seed: %d" % world.seed)
 	if unit_manager != null:
 		lines.append("Creatures: %d" % unit_manager.creature_count())
+		var creature_debug := unit_manager.debug_snapshot()
+		if not creature_debug.is_empty():
+			var target_cell: Vector2i = creature_debug.get("target_cell", Vector2i(-1, -1))
+			var target_dir: Vector2 = creature_debug.get("target_direction", Vector2.ZERO)
+			lines.append(
+				"Creature: %s / %s" % [
+					str(creature_debug.get("intent", "unknown")),
+					str(creature_debug.get("action", "idle")),
+				]
+			)
+			lines.append(
+				"Target: cell=(%d,%d) dir=(%.2f, %.2f)" % [
+					target_cell.x,
+					target_cell.y,
+					target_dir.x,
+					target_dir.y,
+				]
+			)
+			lines.append("Replan in: %.2fs" % float(creature_debug.get("replan_in", 0.0)))
 	if not startup_timings.is_empty():
 		lines.append(
 			"Load ms: total=%d gen=%d render=%d" % [

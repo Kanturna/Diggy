@@ -15,6 +15,7 @@ var seed: int
 var materials := PackedByteArray()
 var variants := PackedByteArray()
 var flags := PackedInt32Array()
+var revision := 0
 
 var _dirty_chunk_keys: Dictionary = {}
 var _bulk_update_depth := 0
@@ -71,6 +72,7 @@ func set_cell(x: int, y: int, material: int, variant: int, cell_flags: int) -> v
 	materials[i] = material
 	variants[i] = variant
 	flags[i] = cell_flags
+	revision += 1
 	if _bulk_update_depth == 0:
 		mark_dirty_by_cell(x, y)
 
@@ -87,6 +89,7 @@ func set_material(x: int, y: int, material: int, variant_override: int = -1) -> 
 	materials[i] = material
 	flags[i] = next_flags
 	variants[i] = next_variant
+	revision += 1
 	mark_dirty_by_cell(x, y)
 
 func is_blocking(x: int, y: int) -> bool:
@@ -130,6 +133,17 @@ func chunk_rect(chunk: Vector2i) -> Rect2i:
 	var w: int = mini(chunk_size, width - x)
 	var h: int = mini(chunk_size, height - y)
 	return Rect2i(x, y, w, h)
+
+func carve_earth_cells(cells: Array[Vector2i]) -> int:
+	var carved := 0
+	for cell in cells:
+		if not is_in_bounds(cell.x, cell.y):
+			continue
+		if get_material(cell.x, cell.y) != MaterialType.Id.EARTH:
+			continue
+		set_material(cell.x, cell.y, MaterialType.Id.EMPTY)
+		carved += 1
+	return carved
 
 func _default_flags_for_material(material: int) -> int:
 	if material == MaterialType.Id.EARTH:

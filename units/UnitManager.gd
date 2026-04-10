@@ -32,3 +32,8 @@ func _spawn(world: WorldModel) -> void:
 
 func creature_count() -> int:
 	return _creatures.size()
+
+func debug_snapshot() -> Dictionary:
+	if _creatures.is_empty():
+		return {}
+	return _creatures[0].get_debug_snapshot()
