@@ -37,9 +37,9 @@ func _build_debug_text(cell: Vector2i) -> String:
 		var zoom_levels := Config.CAMERA_ZOOM_LEVELS
 		var zoom_level_index := zoom_levels.find(camera.zoom.x)
 		if zoom_level_index >= 0:
-			lines.append("Zoom: %.3f (%d/%d)" % [camera.zoom.x, zoom_level_index + 1, zoom_levels.size()])
+			lines.append("Zoom: %.4f (%d/%d, Q/E or wheel)" % [camera.zoom.x, zoom_level_index + 1, zoom_levels.size()])
 		else:
-			lines.append("Zoom: %.3f" % camera.zoom.x)
+			lines.append("Zoom: %.4f" % camera.zoom.x)
 	lines.append("Cell: (%d, %d)" % [cell.x, cell.y])
 
 	if not world.is_in_bounds(cell.x, cell.y):

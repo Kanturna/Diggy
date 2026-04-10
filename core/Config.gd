@@ -14,13 +14,14 @@ const CAVE_SMOOTH_PASSES := 2
 const CAMERA_BASE_SPEED := 550.0
 const CAMERA_SHIFT_MULTIPLIER := 2.2
 const CAMERA_ZOOM_LEVELS := [
+	0.0625,
 	0.125,
 	0.25,
 	0.5,
 	1.0,
 	2.0,
 ]
-const CAMERA_DEFAULT_ZOOM_INDEX := 3
+const CAMERA_DEFAULT_ZOOM_INDEX := 4
 
 const DEBUG_TOGGLE_ACTION := "debug_toggle"
 const MOVE_UP_ACTION := "camera_up"
