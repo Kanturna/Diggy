@@ -9,15 +9,16 @@ const MaterialType = preload("res://core/MaterialType.gd")
 const Config       = preload("res://core/Config.gd")
 
 # ── Body dimensions (world-pixels; 1 cell = 3 px) ───────────────────────────
-const LOWER_R := 2.3    # body oval base radius
-const UPPER_R := 2.0    # head oval base radius
-const TAIL_R1 := 1.5    # first tail segment radius
-const TAIL_R2 := 1.0    # second tail segment radius (tip)
-const JAW_R   := 0.85   # jaw oval radius
+# Halved from original so creature fits cleanly in a 2-cell corridor.
+const LOWER_R := 1.15   # body oval base radius  (~0.77 cell radius)
+const UPPER_R := 1.00   # head oval base radius
+const TAIL_R1 := 0.75   # first tail segment radius
+const TAIL_R2 := 0.50   # second tail segment radius (tip)
+const JAW_R   := 0.42   # jaw oval radius
 
 # ── Positional offsets ───────────────────────────────────────────────────────
 const HEAD_FORWARD    := 0.90   # head center = body + facing * LOWER_R * this
-const TAIL_BASE_OFF   := 1.80   # tail attachment behind body center
+const TAIL_BASE_OFF   := 0.90   # tail attachment behind body center (halved)
 const TAIL1_EXTRA     := 0.25   # extra tail1 gap (in TAIL_R1 units)
 const SEG_GAP1        := 1.50   # tail1→tail2 gap (in TAIL_R1 units)
 const SEG_GAP2        := 1.80   # tail2 extra gap (in TAIL_R2 units)
@@ -91,11 +92,20 @@ func _process(delta: float) -> void:
 func _passable(pos: Vector2) -> bool:
 	if world == null:
 		return true
-	var cx := int(floor(pos.x / Config.CELL_SIZE))
-	var cy := int(floor(pos.y / Config.CELL_SIZE))
-	if not world.is_in_bounds(cx, cy):
-		return false
-	return world.get_material(cx, cy) == MaterialType.Id.EMPTY
+	# Check all cells within the body's perpendicular radius so the visual
+	# boundary and the collision boundary match.
+	var r  := LOWER_R
+	var x0 := int(floor((pos.x - r) / Config.CELL_SIZE))
+	var x1 := int(floor((pos.x + r) / Config.CELL_SIZE))
+	var y0 := int(floor((pos.y - r) / Config.CELL_SIZE))
+	var y1 := int(floor((pos.y + r) / Config.CELL_SIZE))
+	for cy in range(y0, y1 + 1):
+		for cx in range(x0, x1 + 1):
+			if not world.is_in_bounds(cx, cy):
+				return false
+			if world.get_material(cx, cy) != MaterialType.Id.EMPTY:
+				return false
+	return true
 
 func _new_dir() -> void:
 	velocity   = Vector2.from_angle(randf() * TAU) * SPEED
