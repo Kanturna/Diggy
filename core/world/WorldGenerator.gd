@@ -66,9 +66,52 @@ func _smooth_pass(world: WorldModel) -> void:
 
 	for y in height:
 		var row_offset := y * width
+		var top_row_offset := row_offset - width
+		var bottom_row_offset := row_offset + width
+		var has_top := y > 0
+		var has_bottom := y < height - 1
 		for x in width:
 			var idx := row_offset + x
-			var solid_neighbors := _count_earth_neighbors(current_materials, width, height, x, y)
+			var has_left := x > 0
+			var has_right := x < width - 1
+			var solid_neighbors := 0
+
+			if has_top:
+				if has_left:
+					solid_neighbors += int(current_materials[top_row_offset + x - 1] == MaterialType.Id.EARTH)
+				else:
+					solid_neighbors += 1
+				solid_neighbors += int(current_materials[top_row_offset + x] == MaterialType.Id.EARTH)
+				if has_right:
+					solid_neighbors += int(current_materials[top_row_offset + x + 1] == MaterialType.Id.EARTH)
+				else:
+					solid_neighbors += 1
+			else:
+				solid_neighbors += 3
+
+			if has_left:
+				solid_neighbors += int(current_materials[row_offset + x - 1] == MaterialType.Id.EARTH)
+			else:
+				solid_neighbors += 1
+
+			if has_right:
+				solid_neighbors += int(current_materials[row_offset + x + 1] == MaterialType.Id.EARTH)
+			else:
+				solid_neighbors += 1
+
+			if has_bottom:
+				if has_left:
+					solid_neighbors += int(current_materials[bottom_row_offset + x - 1] == MaterialType.Id.EARTH)
+				else:
+					solid_neighbors += 1
+				solid_neighbors += int(current_materials[bottom_row_offset + x] == MaterialType.Id.EARTH)
+				if has_right:
+					solid_neighbors += int(current_materials[bottom_row_offset + x + 1] == MaterialType.Id.EARTH)
+				else:
+					solid_neighbors += 1
+			else:
+				solid_neighbors += 3
+
 			var current := current_materials[idx]
 			if solid_neighbors >= 5:
 				next_materials[idx] = MaterialType.Id.EARTH
@@ -85,21 +128,6 @@ func _smooth_pass(world: WorldModel) -> void:
 			world.materials[i] = MaterialType.Id.EMPTY
 			world.variants[i] = 0
 			world.flags[i] = CellFlags.Id.NONE
-
-func _count_earth_neighbors(materials: PackedByteArray, width: int, height: int, x: int, y: int) -> int:
-	var count := 0
-	for oy in range(-1, 2):
-		var ny := y + oy
-		for ox in range(-1, 2):
-			if ox == 0 and oy == 0:
-				continue
-			var nx := x + ox
-			if nx < 0 or ny < 0 or nx >= width or ny >= height:
-				count += 1
-				continue
-			if materials[ny * width + nx] == MaterialType.Id.EARTH:
-				count += 1
-	return count
 
 func _apply_variants(world: WorldModel) -> void:
 	var base_noise := FastNoiseLite.new()
