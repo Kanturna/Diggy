@@ -157,6 +157,7 @@ func _build_snapshot(origin_cell: Vector2i) -> Dictionary:
 		"region_lookup": region_lookup,
 		"region_size": region_cells.size(),
 		"boundary_cells": boundary_cells,
+		"boundary_lookup": boundary_lookup,
 		"frontier_clusters": frontier_clusters,
 	}
 

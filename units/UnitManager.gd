@@ -8,10 +8,12 @@ const CaveRegionAnalysisScript = preload("res://core/world/CaveRegionAnalysis.gd
 
 var _creatures: Array[Creature] = []
 var _cave_region_analysis: CaveRegionAnalysis = null
+var _spawn_count_by_region: Dictionary = {}
 
 func setup(world_model: WorldModel) -> void:
 	_cave_region_analysis = CaveRegionAnalysisScript.new()
 	_cave_region_analysis.setup(world_model)
+	_spawn_count_by_region.clear()
 	_spawn(world_model)
 
 func _spawn(world: WorldModel) -> void:
@@ -22,7 +24,9 @@ func _spawn(world: WorldModel) -> void:
 		tries += 1
 		var cx := randi_range(pad, world.width  - pad - 1)
 		var cy := randi_range(pad, world.height - pad - 1)
-		if world.get_material(cx, cy) != MaterialType.Id.EMPTY:
+		var spawn_cell := Vector2i(cx, cy)
+		var snapshot := _spawn_snapshot_for_cell(world, spawn_cell)
+		if snapshot.is_empty():
 			continue
 		var c: Creature = CreatureGD.new()
 		c.global_position = Vector2(
@@ -32,7 +36,45 @@ func _spawn(world: WorldModel) -> void:
 		add_child(c)
 		c.setup(world, _cave_region_analysis)
 		_creatures.append(c)
+		_register_spawn_region(snapshot)
 		spawned += 1
+
+func _spawn_snapshot_for_cell(world: WorldModel, cell: Vector2i) -> Dictionary:
+	if world.get_material(cell.x, cell.y) != MaterialType.Id.EMPTY:
+		return {}
+	if not _is_far_enough_from_existing_creatures(cell):
+		return {}
+
+	var snapshot: Dictionary = _cave_region_analysis.get_region_snapshot(cell)
+	if snapshot.is_empty():
+		return {}
+	if int(snapshot.get("region_size", 0)) < Config.CREATURE_SPAWN_MIN_REGION_SIZE:
+		return {}
+
+	var boundary_lookup: Dictionary = snapshot.get("boundary_lookup", {})
+	if boundary_lookup.has(cell):
+		return {}
+
+	var region_anchor: Vector2i = snapshot.get("region_id_anchor", Vector2i(-1, -1))
+	var existing_region_count := int(_spawn_count_by_region.get(region_anchor, 0))
+	if existing_region_count >= Config.CREATURE_SPAWN_MAX_PER_REGION:
+		return {}
+	return snapshot
+
+func _is_far_enough_from_existing_creatures(cell: Vector2i) -> bool:
+	var world_pos := Vector2(
+		(cell.x + 0.5) * Config.CELL_SIZE,
+		(cell.y + 0.5) * Config.CELL_SIZE
+	)
+	var min_distance := Config.CREATURE_SPAWN_MIN_CREATURE_DISTANCE_CELLS * Config.CELL_SIZE
+	for creature in _creatures:
+		if creature.global_position.distance_to(world_pos) < min_distance:
+			return false
+	return true
+
+func _register_spawn_region(snapshot: Dictionary) -> void:
+	var region_anchor: Vector2i = snapshot.get("region_id_anchor", Vector2i(-1, -1))
+	_spawn_count_by_region[region_anchor] = int(_spawn_count_by_region.get(region_anchor, 0)) + 1
 
 func creature_count() -> int:
 	return _creatures.size()

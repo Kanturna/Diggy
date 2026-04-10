@@ -247,6 +247,7 @@ func _tick_dig_block(delta: float) -> void:
 
 func _choose_best_traversal_plan(snapshot: Dictionary, reachability: Dictionary, origin_cell: Vector2i) -> Dictionary:
 	var best_plan: Dictionary = {}
+	var best_zero_step_plan: Dictionary = {}
 	for cluster in _snapshot_frontier_clusters():
 		var staging_cells: Array[Vector2i] = _cluster_staging_cells(cluster)
 		for staging_cell in staging_cells:
@@ -279,9 +280,15 @@ func _choose_best_traversal_plan(snapshot: Dictionary, reachability: Dictionary,
 				"alignment_score": alignment_score,
 				"origin_region_lookup": snapshot.get("region_lookup", {}),
 			}
+			if path_cost == 0:
+				if _is_better_traversal_candidate(candidate, best_zero_step_plan):
+					best_zero_step_plan = candidate
+				continue
 			if _is_better_traversal_candidate(candidate, best_plan):
 				best_plan = candidate
-	return best_plan
+	if not best_plan.is_empty():
+		return best_plan
+	return best_zero_step_plan
 
 func _is_better_traversal_candidate(candidate: Dictionary, incumbent: Dictionary) -> bool:
 	if incumbent.is_empty():
