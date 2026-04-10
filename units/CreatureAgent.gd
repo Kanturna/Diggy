@@ -3,7 +3,6 @@ class_name CreatureAgent
 
 const Config = preload("res://core/Config.gd")
 const MaterialType = preload("res://core/MaterialType.gd")
-const CreatureGenomeScript = preload("res://units/CreatureGenome.gd")
 
 var world: WorldModel
 var genome: CreatureGenome
@@ -140,13 +139,13 @@ static func can_occupy_world(
 
 	var half_width := body_width_cells * Config.CELL_SIZE * 0.5
 	var body_length := body_length_cells * Config.CELL_SIZE
-	var longitudinal_offsets := [
+	var longitudinal_offsets: Array[float] = [
 		-body_length * 0.45,
 		-body_length * 0.15,
 		body_length * 0.15,
 		body_length * 0.45,
 	]
-	var lateral_offsets := [
+	var lateral_offsets: Array[float] = [
 		-half_width * 0.75,
 		0.0,
 		half_width * 0.75,
@@ -154,8 +153,8 @@ static func can_occupy_world(
 
 	for x_offset in longitudinal_offsets:
 		for y_offset in lateral_offsets:
-			var sample_world := world_position + dir * x_offset + perp * y_offset
-			var sample_cell := Vector2i(
+			var sample_world: Vector2 = world_position + dir * x_offset + perp * y_offset
+			var sample_cell: Vector2i = Vector2i(
 				floor(sample_world.x / Config.CELL_SIZE),
 				floor(sample_world.y / Config.CELL_SIZE)
 			)
@@ -164,8 +163,8 @@ static func can_occupy_world(
 			if world_model.get_material(sample_cell.x, sample_cell.y) != MaterialType.Id.EMPTY:
 				return false
 
-	var head_sample := world_position + dir * body_length * 0.6
-	var head_cell := Vector2i(
+	var head_sample: Vector2 = world_position + dir * body_length * 0.6
+	var head_cell: Vector2i = Vector2i(
 		floor(head_sample.x / Config.CELL_SIZE),
 		floor(head_sample.y / Config.CELL_SIZE)
 	)
