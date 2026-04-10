@@ -148,6 +148,8 @@ func get_debug_snapshot() -> Dictionary:
 	return {
 		"intent": _intent_name(_intent),
 		"action": _current_action,
+		"world_position": global_position,
+		"perception_radius_cells": Config.CREATURE_PERCEPTION_RADIUS_CELLS,
 		"target_cell": _move_target_cell,
 		"frontier_cell": first_frontier_cell,
 		"dig_cell": _current_dig_cell,
@@ -169,6 +171,8 @@ func get_debug_snapshot() -> Dictionary:
 		"continuity_score": float(_traversal_plan.get("continuity_score", 0.0)),
 		"sensor_hollow_score": float(_traversal_plan.get("sensor_hollow_score", 0.0)),
 		"sensor_open_span_score": float(_traversal_plan.get("sensor_open_span_score", 0.0)),
+		"perception_score": float(_traversal_plan.get("perception_score", 0.0)),
+		"perception_boost": float(_traversal_plan.get("perception_boost", 0.0)),
 		"parallel_risk": float(_traversal_plan.get("parallel_risk", 0.0)),
 		"niche_risk": float(_traversal_plan.get("niche_risk", 0.0)),
 		"scrape_penalty": float(_traversal_plan.get("scrape_penalty", 0.0)),
@@ -412,6 +416,8 @@ func _traversal_plan_from_candidate(
 		"depth_score": float(candidate.get("depth_score", 0.0)),
 		"sensor_hollow_score": float(candidate.get("sensor_hollow_score", 0.0)),
 		"sensor_open_span_score": float(candidate.get("sensor_open_span_score", 0.0)),
+		"perception_score": float(candidate.get("perception_score", 0.0)),
+		"perception_boost": float(candidate.get("perception_boost", 0.0)),
 		"parallel_risk": float(candidate.get("parallel_risk", 0.0)),
 		"niche_risk": float(candidate.get("niche_risk", 0.0)),
 		"scrape_penalty": float(candidate.get("scrape_penalty", 0.0)),
@@ -704,6 +710,8 @@ func _commit_local_frontier_option(option: Dictionary) -> void:
 		_traversal_plan["depth_score"] = float(option.get("depth_score", 0.0))
 		_traversal_plan["sensor_hollow_score"] = float(option.get("sensor_hollow_score", 0.0))
 		_traversal_plan["sensor_open_span_score"] = float(option.get("sensor_open_span_score", 0.0))
+		_traversal_plan["perception_score"] = float(option.get("perception_score", 0.0))
+		_traversal_plan["perception_boost"] = float(option.get("perception_boost", 0.0))
 		_traversal_plan["parallel_risk"] = float(option.get("parallel_risk", 0.0))
 		_traversal_plan["niche_risk"] = float(option.get("niche_risk", 0.0))
 		_traversal_plan["scrape_penalty"] = float(option.get("scrape_penalty", 0.0))

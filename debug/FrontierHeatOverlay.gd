@@ -43,6 +43,8 @@ func _draw() -> void:
 	var selected_cells_variant = _snapshot_cache.get("selected_cells", [])
 	for selected_cell_variant in selected_cells_variant:
 		var selected_cell: Vector2i = selected_cell_variant
+		if selected_cell.x < 0 or selected_cell.y < 0:
+			continue
 		selected_cells_lookup[selected_cell] = true
 	var cell_size := float(Config.CELL_SIZE)
 
@@ -59,6 +61,19 @@ func _draw() -> void:
 		draw_rect(rect, color)
 		if selected_cells_lookup.has(cell):
 			draw_rect(rect.grow(1.0), Color(0.45, 0.95, 1.0, 0.95), false, 2.0)
+
+	var selected_world_pos: Vector2 = _snapshot_cache.get("selected_creature_world_position", Vector2.ZERO)
+	var selected_radius_cells := float(_snapshot_cache.get("selected_creature_radius_cells", 0.0))
+	if selected_radius_cells > 0.0:
+		draw_arc(
+			selected_world_pos,
+			selected_radius_cells * cell_size,
+			0.0,
+			TAU,
+			64,
+			Color(0.45, 0.95, 1.0, 0.75),
+			2.0
+		)
 
 func _heat_color(t: float) -> Color:
 	if t <= 0.5:

@@ -9,11 +9,13 @@ const CaveRegionAnalysisScript = preload("res://core/world/CaveRegionAnalysis.gd
 var _creatures: Array[Creature] = []
 var _cave_region_analysis: CaveRegionAnalysis = null
 var _spawn_count_by_region: Dictionary = {}
+var _selected_creature: Creature = null
 
 func setup(world_model: WorldModel) -> void:
 	_cave_region_analysis = CaveRegionAnalysisScript.new()
 	_cave_region_analysis.setup(world_model)
 	_spawn_count_by_region.clear()
+	_selected_creature = null
 	_spawn(world_model)
 
 func _spawn(world: WorldModel) -> void:
@@ -36,8 +38,33 @@ func _spawn(world: WorldModel) -> void:
 		add_child(c)
 		c.setup(world, _cave_region_analysis, self)
 		_creatures.append(c)
+		if _selected_creature == null:
+			_selected_creature = c
 		_register_spawn_region(snapshot)
 		spawned += 1
+
+func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		var camera := get_viewport().get_camera_2d()
+		if camera == null:
+			return
+		select_creature_at(camera.get_global_mouse_position())
+
+func select_creature_at(world_pos: Vector2) -> void:
+	var best_creature: Creature = null
+	var best_distance := INF
+	var max_pick_distance := maxf(
+		Config.CREATURE_BODY_LENGTH_CELLS * Config.CELL_SIZE,
+		8.0
+	)
+	for creature in _creatures:
+		var distance := creature.global_position.distance_to(world_pos)
+		if distance > max_pick_distance:
+			continue
+		if distance < best_distance:
+			best_distance = distance
+			best_creature = creature
+	_selected_creature = best_creature
 
 func _spawn_snapshot_for_cell(world: WorldModel, cell: Vector2i) -> Dictionary:
 	if world.get_material(cell.x, cell.y) != MaterialType.Id.EMPTY:
@@ -98,13 +125,26 @@ func cluster_claim_count(cluster_id: String, excluding: Creature = null) -> int:
 	return count
 
 func debug_snapshot() -> Dictionary:
-	if _creatures.is_empty():
+	var creature := _debug_focus_creature()
+	if creature == null:
 		return {}
-	return _creatures[0].get_debug_snapshot()
+	return creature.get_debug_snapshot()
 
 func frontier_debug_snapshot() -> Dictionary:
 	if _creatures.is_empty():
 		return {}
+	var focused := _debug_focus_creature()
+	if focused != null:
+		var focused_snapshot := focused.get_frontier_debug_snapshot()
+		var focused_debug := focused.get_debug_snapshot()
+		return {
+			"entries": focused_snapshot.get("entries", []),
+			"min_score": float(focused_snapshot.get("min_score", 0.0)),
+			"max_score": float(focused_snapshot.get("max_score", 1.0)),
+			"selected_cells": [focused_snapshot.get("selected_frontier_cell", Vector2i(-1, -1))],
+			"selected_creature_world_position": focused_debug.get("world_position", Vector2.ZERO),
+			"selected_creature_radius_cells": float(focused_debug.get("perception_radius_cells", 0.0)),
+		}
 	var entries_by_cell: Dictionary = {}
 	var selected_lookup: Dictionary = {}
 	var min_score := INF
@@ -135,3 +175,10 @@ func frontier_debug_snapshot() -> Dictionary:
 		"max_score": max_score,
 		"selected_cells": selected_lookup.keys(),
 	}
+
+func _debug_focus_creature() -> Creature:
+	if _selected_creature != null and is_instance_valid(_selected_creature):
+		return _selected_creature
+	if _creatures.is_empty():
+		return null
+	return _creatures[0]

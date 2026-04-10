@@ -1,9 +1,12 @@
 extends RefCounted
 class_name DigPlanner
 
+const Config = preload("res://core/Config.gd")
+
 const TOP_K := 5
 
 const SENSOR_SCORE_WEIGHT := 0.55
+const PERCEPTION_BOOST_WEIGHT := 0.85
 const CONTINUITY_WEIGHT := 1.15
 const DEPTH_WEIGHT := 1.45
 const PARALLEL_WEIGHT := 1.25
@@ -62,8 +65,12 @@ func choose_candidate(
 			var parallel_risk := float(metric.get("parallel_risk", 0.0))
 			var niche_risk := float(metric.get("niche_risk", 0.0))
 			var scrape_penalty := float(metric.get("scrape_penalty", 0.0))
+			var perception_score := _perception_radius_score(origin_cell, frontier_cell)
+			var perception_interest := maxf(sensor_hollow_score, sensor_open_span_score)
+			var perception_boost := perception_interest * perception_score * PERCEPTION_BOOST_WEIGHT
 			var sensor_score := sensor_hollow_score * SENSOR_HOLLOW_WEIGHT \
-				+ sensor_open_span_score * SENSOR_OPEN_SPAN_WEIGHT
+				+ sensor_open_span_score * SENSOR_OPEN_SPAN_WEIGHT \
+				+ perception_boost
 			# Build score is the backbone; sensors only steer plausible tunnel moves.
 			var build_score := continuity_score * CONTINUITY_WEIGHT \
 				+ depth_score * DEPTH_WEIGHT \
@@ -88,6 +95,8 @@ func choose_candidate(
 				"depth_score": depth_score,
 				"sensor_hollow_score": sensor_hollow_score,
 				"sensor_open_span_score": sensor_open_span_score,
+				"perception_score": perception_score,
+				"perception_boost": perception_boost,
 				"parallel_risk": parallel_risk,
 				"niche_risk": niche_risk,
 				"scrape_penalty": scrape_penalty,
@@ -229,6 +238,15 @@ func _continuity_score(last_dig_direction: Vector2i, candidate_direction: Vector
 	var current := _normalize_cardinal(last_dig_direction)
 	var candidate := _normalize_cardinal(candidate_direction)
 	return float(current.x * candidate.x + current.y * candidate.y)
+
+func _perception_radius_score(origin_cell: Vector2i, frontier_cell: Vector2i) -> float:
+	var radius := float(Config.CREATURE_PERCEPTION_RADIUS_CELLS)
+	if radius <= 0.0:
+		return 0.0
+	var distance := origin_cell.distance_to(frontier_cell)
+	if distance > radius:
+		return 0.0
+	return clampf(1.0 - (distance / radius), 0.0, 1.0)
 
 func _normalize_cardinal(direction: Vector2i) -> Vector2i:
 	if abs(direction.x) >= abs(direction.y):
