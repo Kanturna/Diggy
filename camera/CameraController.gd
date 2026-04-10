@@ -35,16 +35,16 @@ func _handle_movement(delta: float) -> void:
 
 func _handle_zoom_keys() -> void:
 	if Input.is_action_just_pressed(Config.ZOOM_IN_ACTION):
-		_step_zoom(-1)
-	if Input.is_action_just_pressed(Config.ZOOM_OUT_ACTION):
 		_step_zoom(1)
+	if Input.is_action_just_pressed(Config.ZOOM_OUT_ACTION):
+		_step_zoom(-1)
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.pressed:
 		if event.button_index == MOUSE_BUTTON_WHEEL_UP:
-			_step_zoom(-1)
-		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
 			_step_zoom(1)
+		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+			_step_zoom(-1)
 
 func _step_zoom(direction: int) -> void:
 	var next_index := clampi(_zoom_index + direction, 0, Config.CAMERA_ZOOM_LEVELS.size() - 1)
