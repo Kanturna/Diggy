@@ -139,7 +139,7 @@ func _plan_next_intent(force_wander: bool) -> void:
 		_set_random_wander_target()
 		return
 
-	var candidate := _find_external_cave_target()
+	var candidate: Dictionary = _find_external_cave_target()
 	if candidate.is_empty():
 		_set_random_wander_target()
 		return
@@ -160,7 +160,7 @@ func _set_random_wander_target() -> void:
 	_current_action = "move"
 
 func _tick_wander(delta: float) -> void:
-	var move_dir := _best_open_direction(_target_direction)
+	var move_dir: Vector2 = _best_open_direction(_target_direction)
 	if move_dir == Vector2.ZERO:
 		_set_random_wander_target()
 		return
@@ -171,12 +171,12 @@ func _tick_connect(delta: float) -> void:
 	if _target_cell.x < 0:
 		_plan_next_intent(false)
 		return
-	var desired_dir := (_target_world - global_position).normalized()
+	var desired_dir: Vector2 = (_target_world - global_position).normalized()
 	if desired_dir.length_squared() <= 0.0001:
 		_plan_next_intent(false)
 		return
 	_target_direction = desired_dir
-	var move_dir := _best_open_direction(desired_dir)
+	var move_dir: Vector2 = _best_open_direction(desired_dir)
 	if move_dir != Vector2.ZERO:
 		_move_along(move_dir, delta)
 		_current_action = "move"
@@ -186,9 +186,9 @@ func _tick_connect(delta: float) -> void:
 	_current_action = "dig"
 
 func _tick_dig(delta: float) -> void:
-	var desired_dir := _target_direction
+	var desired_dir: Vector2 = _target_direction
 	if _target_cell.x >= 0:
-		var target_delta := _target_world - global_position
+		var target_delta: Vector2 = _target_world - global_position
 		if target_delta.length_squared() > 0.0001:
 			desired_dir = target_delta.normalized()
 			_target_direction = desired_dir
@@ -196,12 +196,12 @@ func _tick_dig(delta: float) -> void:
 		velocity = Vector2.ZERO
 		_current_action = "dig"
 		return
-	var carved := _dig_toward(desired_dir)
+	var carved: int = _dig_toward(desired_dir)
 	_dig_cooldown = Config.CREATURE_DIG_INTERVAL
 	if carved > 0:
 		_current_action = "dig"
 		_invalidate_region_cache()
-	var move_dir := _best_open_direction(desired_dir)
+	var move_dir: Vector2 = _best_open_direction(desired_dir)
 	if move_dir != Vector2.ZERO:
 		_intent = Intent.CONNECT_CAVE
 		_move_along(move_dir, delta)
@@ -214,7 +214,7 @@ func _move_along(direction: Vector2, delta: float) -> void:
 		velocity = Vector2.ZERO
 		return
 	velocity = direction.normalized() * SPEED
-	var next_position := global_position + velocity * delta
+	var next_position: Vector2 = global_position + velocity * delta
 	if _passable(next_position):
 		global_position = next_position
 	else:
@@ -226,8 +226,8 @@ func _best_open_direction(desired_dir: Vector2) -> Vector2:
 	var best_dir := Vector2.ZERO
 	var best_score := -INF
 	for angle in STEER_ANGLES:
-		var candidate_dir := desired_dir.rotated(angle).normalized()
-		var candidate_pos := global_position + candidate_dir * Config.CELL_SIZE
+		var candidate_dir: Vector2 = desired_dir.rotated(angle).normalized()
+		var candidate_pos: Vector2 = global_position + candidate_dir * Config.CELL_SIZE
 		if not _passable(candidate_pos):
 			continue
 		var score := candidate_dir.dot(desired_dir)
@@ -237,10 +237,10 @@ func _best_open_direction(desired_dir: Vector2) -> Vector2:
 	return best_dir
 
 func _find_external_cave_target() -> Dictionary:
-	var origin_cell := _world_to_cell(global_position)
+	var origin_cell: Vector2i = _world_to_cell(global_position)
 	if not world.is_in_bounds(origin_cell.x, origin_cell.y):
 		return {}
-	var region := _get_current_region(origin_cell)
+	var region: Dictionary = _get_current_region(origin_cell)
 	if region.is_empty():
 		return {}
 
@@ -254,7 +254,7 @@ func _find_external_cave_target() -> Dictionary:
 		for dx in range(-radius, radius + 1):
 			if dx == 0 and dy == 0:
 				continue
-			var candidate := origin_cell + Vector2i(dx, dy)
+			var candidate: Vector2i = origin_cell + Vector2i(dx, dy)
 			if not world.is_in_bounds(candidate.x, candidate.y):
 				continue
 			if dx * dx + dy * dy > radius * radius:
@@ -302,14 +302,14 @@ func _get_current_region(origin_cell: Vector2i) -> Dictionary:
 		return visited
 
 	var queue: Array[Vector2i] = [origin_cell]
-	var queue_index := 0
+	var queue_index: int = 0
 	visited[origin_cell] = true
 
 	while queue_index < queue.size():
-		var cell := queue[queue_index]
+		var cell: Vector2i = queue[queue_index]
 		queue_index += 1
 		for offset in [Vector2i.LEFT, Vector2i.RIGHT, Vector2i.UP, Vector2i.DOWN]:
-			var next_cell := cell + offset
+			var next_cell: Vector2i = cell + offset
 			if next_cell.x < min_x or next_cell.x > max_x or next_cell.y < min_y or next_cell.y > max_y:
 				continue
 			if visited.has(next_cell):
@@ -332,27 +332,27 @@ func _invalidate_region_cache() -> void:
 func _has_external_target() -> bool:
 	if _target_cell.x < 0:
 		return false
-	var origin_cell := _world_to_cell(global_position)
-	var region := _get_current_region(origin_cell)
+	var origin_cell: Vector2i = _world_to_cell(global_position)
+	var region: Dictionary = _get_current_region(origin_cell)
 	return not region.has(_target_cell)
 
 func _dig_toward(direction: Vector2) -> int:
 	if world == null or direction.length_squared() <= 0.0001:
 		return 0
-	var forward := direction.normalized()
-	var side := forward.orthogonal()
-	var front_world := global_position + forward * (LOWER_R + Config.CELL_SIZE * 0.75)
-	var half_width := Config.CREATURE_BODY_WIDTH_CELLS * 0.5
-	var offsets := [
+	var forward: Vector2 = direction.normalized()
+	var side: Vector2 = forward.orthogonal()
+	var front_world: Vector2 = global_position + forward * (LOWER_R + Config.CELL_SIZE * 0.75)
+	var half_width: float = Config.CREATURE_BODY_WIDTH_CELLS * 0.5
+	var offsets: Array = [
 		-half_width * 0.5,
 		half_width * 0.5,
 	]
 	var cells_to_carve: Array[Vector2i] = []
 	for row in 2:
-		var row_forward := front_world + forward * (float(row) * Config.CELL_SIZE * 0.75)
+		var row_forward: Vector2 = front_world + forward * (float(row) * Config.CELL_SIZE * 0.75)
 		for offset_scale in offsets:
-			var sample_world := row_forward + side * offset_scale * Config.CELL_SIZE
-			var sample_cell := _world_to_cell(sample_world)
+			var sample_world: Vector2 = row_forward + side * float(offset_scale) * Config.CELL_SIZE
+			var sample_cell: Vector2i = _world_to_cell(sample_world)
 			if not cells_to_carve.has(sample_cell):
 				cells_to_carve.append(sample_cell)
 	return world.carve_earth_cells(cells_to_carve)
