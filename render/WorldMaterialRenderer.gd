@@ -11,12 +11,23 @@ var _texture := ImageTexture.create_from_image(_image)
 var _sprite := Sprite2D.new()
 
 var _earth_palette := [
-	Color8(99, 66, 40),
-	Color8(104, 70, 43),
-	Color8(109, 74, 47),
-	Color8(114, 78, 50),
-	Color8(119, 82, 54),
-	Color8(124, 86, 58),
+	Color8(85, 54, 28),
+	Color8(89, 57, 31),
+	Color8(93, 61, 34),
+	Color8(97, 64, 36),
+	Color8(101, 67, 39),
+	Color8(105, 71, 42),
+	Color8(109, 74, 45),
+	Color8(113, 78, 48),
+	Color8(117, 81, 51),
+	Color8(121, 85, 54),
+	Color8(125, 88, 57),
+	Color8(129, 92, 60),
+	Color8(133, 95, 63),
+	Color8(137, 99, 66),
+	Color8(141, 102, 69),
+	Color8(145, 106, 72),
+	Color8(149, 109, 75),
 ]
 var _empty_color := Color8(58, 60, 64)
 

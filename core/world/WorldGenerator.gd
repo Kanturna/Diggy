@@ -149,5 +149,5 @@ func _apply_variants(world: WorldModel) -> void:
 				continue
 			var base_sample := (base_noise.get_noise_2d(x, y) + 1.0) * 0.5
 			var detail_sample := (detail_noise.get_noise_2d(x, y) + 1.0) * 0.5
-			var sample := base_sample * 0.82 + detail_sample * 0.18
-			variants[idx] = clampi(int(floor(sample * 6.0)), 0, 5)
+			var sample := base_sample * 0.72 + detail_sample * 0.28
+			variants[idx] = clampi(int(floor(sample * 17.0)), 0, 16)
