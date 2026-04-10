@@ -82,6 +82,7 @@ var _dig_direction := Vector2i.RIGHT
 var _dig_progress := 0.0
 var _dig_advancing := false
 var _dig_advance_target := Vector2.ZERO
+var _dig_carved_lookup: Dictionary = {}
 var _replan_reason := "startup"
 var _frontier_debug_entries: Array[Dictionary] = []
 var _frontier_debug_min_score := 0.0
@@ -217,8 +218,7 @@ func _tick_move_to_frontier(delta: float) -> void:
 
 	var move_dir: Vector2 = _best_open_direction((_cell_center(_move_target_cell) - global_position).normalized())
 	if move_dir == Vector2.ZERO:
-		if _can_begin_dig_from_current_position():
-			_start_dig_from_current_plan()
+		if _try_entry_fallback_dig():
 			return
 		velocity = Vector2.ZERO
 		return
@@ -270,10 +270,12 @@ func _tick_dig_block(delta: float) -> void:
 		return
 
 	if world.carve_earth_cell(_current_dig_cell):
-		var actual_dir := _current_dig_cell - _dig_head_cell
+		var carved_cell := _current_dig_cell
+		var actual_dir := carved_cell - _dig_head_cell
 		if actual_dir != Vector2i.ZERO:
 			_dig_direction = actual_dir
-		_dig_head_cell = _current_dig_cell
+		_dig_head_cell = carved_cell
+		_dig_carved_lookup[carved_cell] = true
 		_dig_advance_target = _cell_center(_dig_head_cell)
 		_dig_advancing = true
 		_dig_progress = 0.0
@@ -293,6 +295,8 @@ func _choose_best_traversal_plan(snapshot: Dictionary, reachability: Dictionary,
 	for cluster in _snapshot_frontier_clusters():
 		var staging_cells: Array[Vector2i] = _cluster_staging_cells(cluster)
 		for staging_cell in staging_cells:
+			if not _is_navigable_cell(staging_cell):
+				continue
 			var distance_map: Dictionary = reachability.get("distance", {})
 			if not distance_map.has(staging_cell):
 				continue
@@ -520,6 +524,7 @@ func _adopt_traversal_plan(traversal_plan: Dictionary) -> void:
 	_dig_direction = traversal_plan.get("dig_direction", Vector2i.RIGHT)
 	_dig_progress = 0.0
 	_dig_advancing = false
+	_dig_carved_lookup.clear()
 	_intent = Intent.MOVE_TO_FRONTIER
 	_current_action = "move"
 	_stuck_timer = 0.0
@@ -534,6 +539,7 @@ func _request_frontier_plan(reason: String) -> void:
 	_dig_head_cell = Vector2i(-1, -1)
 	_dig_progress = 0.0
 	_dig_advancing = false
+	_dig_carved_lookup.clear()
 	_intent = Intent.CHOOSE_FRONTIER
 	_current_action = "choose"
 	_intent_timer = 0.0
@@ -610,7 +616,7 @@ func _effective_dig_head_cell() -> Vector2i:
 		return current_cell
 
 	var staging_cell: Vector2i = _traversal_plan.get("staging_cell", Vector2i(-1, -1))
-	if staging_cell.x >= 0 and _is_empty_cell(staging_cell):
+	if staging_cell.x >= 0 and _can_occupy_cell_center(staging_cell):
 		return staging_cell
 
 	if frontier_cell.x < 0:
@@ -621,7 +627,7 @@ func _effective_dig_head_cell() -> Vector2i:
 	var best_distance := INF
 	for direction in CARDINAL_DIRS:
 		var candidate: Vector2i = frontier_cell + direction
-		if not _is_empty_cell(candidate):
+		if not _can_occupy_cell_center(candidate):
 			continue
 		if not origin_region_lookup.is_empty() and not origin_region_lookup.has(candidate):
 			continue
@@ -642,18 +648,47 @@ func _start_dig_from_current_plan() -> void:
 	if dig_head_cell.x < 0:
 		_request_frontier_plan("dig_missing_staging")
 		return
-	if _world_to_cell(global_position) != dig_head_cell:
+	_enter_dig_state(dig_head_cell, _traversal_plan.get("first_frontier_cell", Vector2i(-1, -1)))
+
+func _try_entry_fallback_dig() -> bool:
+	if _traversal_plan.is_empty():
+		return false
+	var entry_cell: Vector2i = _traversal_plan.get("first_frontier_cell", Vector2i(-1, -1))
+	if entry_cell.x < 0 or not world.is_frontier_earth_block(entry_cell):
+		return false
+	var current_cell := _world_to_cell(global_position)
+	if not _is_empty_cell(current_cell):
+		return false
+	if not _are_cells_adjacent(current_cell, entry_cell):
+		return false
+	_enter_dig_state(current_cell, entry_cell)
+	return _intent == Intent.DIG_BLOCK
+
+func _enter_dig_state(dig_head_cell: Vector2i, dig_cell: Vector2i) -> void:
+	if dig_head_cell.x < 0 or dig_cell.x < 0:
+		_request_frontier_plan("dig_head_invalid")
+		return
+	var current_cell := _world_to_cell(global_position)
+	if current_cell != dig_head_cell:
+		if not _can_occupy_cell_center(dig_head_cell):
+			_request_frontier_plan("dig_head_blocked")
+			return
 		global_position = _cell_center(dig_head_cell)
-	else:
-		var centered_position := _cell_center(dig_head_cell)
-		if can_occupy_world(world, centered_position):
-			global_position = centered_position
+	elif not can_occupy_world(world, global_position):
+		if not _can_occupy_cell_center(dig_head_cell):
+			_request_frontier_plan("dig_head_blocked")
+			return
+		global_position = _cell_center(dig_head_cell)
 	velocity = Vector2.ZERO
 	_dig_head_cell = dig_head_cell
-	_dig_direction = _traversal_plan.get("dig_direction", Vector2i.RIGHT)
-	_current_dig_cell = _traversal_plan.get("first_frontier_cell", Vector2i(-1, -1))
+	var dig_direction: Vector2i = dig_cell - dig_head_cell
+	if dig_direction == Vector2i.ZERO:
+		dig_direction = _traversal_plan.get("dig_direction", Vector2i.RIGHT)
+	_dig_direction = dig_direction
+	_current_dig_cell = dig_cell
 	_dig_progress = 0.0
 	_dig_advancing = false
+	_dig_carved_lookup.clear()
 	_intent = Intent.DIG_BLOCK
 	_current_action = "dig"
 
@@ -689,6 +724,8 @@ func _has_broken_through() -> bool:
 			continue
 		if origin_region_lookup.has(neighbor):
 			continue
+		if _dig_carved_lookup.has(neighbor):
+			continue
 		return true
 	return false
 
@@ -710,7 +747,8 @@ func _cluster_staging_cells(cluster: Dictionary) -> Array[Vector2i]:
 	var staging_cells: Array[Vector2i] = []
 	var cells_variant = cluster.get("staging_cells", [])
 	for cell in cells_variant:
-		staging_cells.append(cell)
+		if _is_navigable_cell(cell):
+			staging_cells.append(cell)
 	return staging_cells
 
 func _plan_path_cells() -> Array[Vector2i]:
@@ -730,6 +768,11 @@ func _is_empty_cell(cell: Vector2i) -> bool:
 
 func _is_navigable_cell(cell: Vector2i) -> bool:
 	if not _is_empty_cell(cell):
+		return false
+	return _can_occupy_cell_center(cell)
+
+func _can_occupy_cell_center(cell: Vector2i) -> bool:
+	if cell.x < 0 or cell.y < 0:
 		return false
 	return can_occupy_world(world, _cell_center(cell))
 
