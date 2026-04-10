@@ -69,7 +69,6 @@ func _build_debug_text(cell: Vector2i) -> String:
 				int(startup_timings.get("world_generate_variants_ms", 0)),
 			]
 		)
-	lines.append("Creatures: %d" % creature_count)
 	if camera != null:
 		var zoom_levels := Config.CAMERA_ZOOM_LEVELS
 		var zoom_level_index := zoom_levels.find(camera.zoom.x)

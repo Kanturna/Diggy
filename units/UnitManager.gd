@@ -5,8 +5,6 @@ const Config       = preload("res://core/Config.gd")
 const MaterialType = preload("res://core/MaterialType.gd")
 const CreatureGD   = preload("res://units/Creature.gd")
 
-const SPAWN_COUNT := 10
-
 var _creatures: Array[Creature] = []
 
 func setup(world_model: WorldModel) -> void:
@@ -15,10 +13,11 @@ func setup(world_model: WorldModel) -> void:
 func _spawn(world: WorldModel) -> void:
 	var tries   := 0
 	var spawned := 0
-	while spawned < SPAWN_COUNT and tries < 50000:
+	var pad     := Config.CREATURE_SPAWN_PADDING_CELLS
+	while spawned < Config.CREATURE_SPAWN_COUNT and tries < Config.CREATURE_SPAWN_ATTEMPTS:
 		tries += 1
-		var cx := randi_range(2, world.width  - 3)
-		var cy := randi_range(2, world.height - 3)
+		var cx := randi_range(pad, world.width  - pad - 1)
+		var cy := randi_range(pad, world.height - pad - 1)
 		if world.get_material(cx, cy) != MaterialType.Id.EMPTY:
 			continue
 		var c: Creature = CreatureGD.new()

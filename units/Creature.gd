@@ -38,8 +38,8 @@ const SWAY2_MULT     := 1.4    # tail2 lateral amplitude
 const PHASE_OFF      := PI * 0.45   # phase offset between tail1 and tail2
 const MIN_SWIM_SPEED := 3.0    # minimum speed to advance swim_phase
 
-# ── Movement ─────────────────────────────────────────────────────────────────
-const SPEED    := 22.0
+# ── Movement (values from Config) ───────────────────────────────────────────
+const SPEED    := Config.CREATURE_SPEED_CELLS_PER_SECOND * Config.CELL_SIZE
 var velocity   := Vector2.ZERO
 var _dir_timer := 0.0
 var world: WorldModel = null
@@ -98,8 +98,8 @@ func _passable(pos: Vector2) -> bool:
 	return world.get_material(cx, cy) == MaterialType.Id.EMPTY
 
 func _new_dir() -> void:
-	velocity    = Vector2.from_angle(randf() * TAU) * SPEED
-	_dir_timer  = randf_range(1.0, 3.5)
+	velocity   = Vector2.from_angle(randf() * TAU) * SPEED
+	_dir_timer = randf_range(Config.CREATURE_TURN_INTERVAL_MIN, Config.CREATURE_TURN_INTERVAL_MAX)
 
 # ── Chain update (SocialSim AKM pattern) ─────────────────────────────────────
 
