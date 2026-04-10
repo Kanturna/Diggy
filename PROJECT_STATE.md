@@ -20,6 +20,7 @@ Milestone 1 foundation is in place:
 2. **WorldModel as single source of truth**
    - no render-owned state
    - mutations route through world API
+   - `set_material` now normalizes flags/variants for state consistency
 
 3. **Strict small scope**
    - no unit/agent/genetic/colony systems or placeholders

@@ -68,8 +68,7 @@ func _count_earth_neighbors(world: WorldModel, x: int, y: int) -> int:
 			if not world.is_in_bounds(nx, ny):
 				count += 1
 				continue
-			var neighbor := world.get_cell(nx, ny)
-			if neighbor.get("material", MaterialType.Id.EMPTY) == MaterialType.Id.EARTH:
+			if world.get_material(nx, ny) == MaterialType.Id.EARTH:
 				count += 1
 	return count
 

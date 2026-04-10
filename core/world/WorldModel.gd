@@ -1,6 +1,9 @@
 extends RefCounted
 class_name WorldModel
 
+const MaterialType = preload("res://core/MaterialType.gd")
+const CellFlags = preload("res://core/CellFlags.gd")
+
 signal world_reset
 
 var width: int
@@ -42,6 +45,21 @@ func get_cell(x: int, y: int) -> Dictionary:
 		"flags": flags[i],
 	}
 
+func get_material(x: int, y: int) -> int:
+	if not is_in_bounds(x, y):
+		return MaterialType.Id.EMPTY
+	return materials[index_of(x, y)]
+
+func get_variant(x: int, y: int) -> int:
+	if not is_in_bounds(x, y):
+		return 0
+	return variants[index_of(x, y)]
+
+func get_flags(x: int, y: int) -> int:
+	if not is_in_bounds(x, y):
+		return CellFlags.Id.NONE
+	return flags[index_of(x, y)]
+
 func set_cell(x: int, y: int, material: int, variant: int, cell_flags: int) -> void:
 	if not is_in_bounds(x, y):
 		return
@@ -51,14 +69,23 @@ func set_cell(x: int, y: int, material: int, variant: int, cell_flags: int) -> v
 	flags[i] = cell_flags
 	mark_dirty_by_cell(x, y)
 
-func set_material(x: int, y: int, material: int) -> void:
+func set_material(x: int, y: int, material: int, variant_override: int = -1) -> void:
 	if not is_in_bounds(x, y):
 		return
 	var i := index_of(x, y)
-	if materials[i] == material:
+	var next_flags := _default_flags_for_material(material)
+	var next_variant := _default_variant_for_material(i, material)
+	if variant_override >= 0:
+		next_variant = variant_override
+	if materials[i] == material and flags[i] == next_flags and variants[i] == next_variant:
 		return
 	materials[i] = material
+	flags[i] = next_flags
+	variants[i] = next_variant
 	mark_dirty_by_cell(x, y)
+
+func is_blocking(x: int, y: int) -> bool:
+	return (get_flags(x, y) & CellFlags.Id.BLOCKING) != 0
 
 func mark_dirty_by_cell(x: int, y: int) -> void:
 	var chunk := Vector2i(x / chunk_size, y / chunk_size)
@@ -88,3 +115,13 @@ func chunk_rect(chunk: Vector2i) -> Rect2i:
 	var w := min(chunk_size, width - x)
 	var h := min(chunk_size, height - y)
 	return Rect2i(x, y, w, h)
+
+func _default_flags_for_material(material: int) -> int:
+	if material == MaterialType.Id.EARTH:
+		return CellFlags.Id.BLOCKING | CellFlags.Id.DIGGABLE
+	return CellFlags.Id.NONE
+
+func _default_variant_for_material(index: int, material: int) -> int:
+	if material == MaterialType.Id.EARTH:
+		return clamp(variants[index], 0, 2)
+	return 0

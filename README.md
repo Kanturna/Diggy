@@ -21,7 +21,7 @@ Build a clean foundation for a mutation-driven terrain simulation where frequent
 - `Main.gd` is wiring only (instantiation, setup, signal connections).
 - World state and rendering are strictly separated.
 - Terrain is treated as dense matter, not decorative background tiles.
-- Material mutation is a first-class path in the API (`WorldModel.set_material`).
+- Material mutation is a first-class path in the API (`WorldModel.set_material`) and normalizes flags/variants for consistent `EARTH <-> EMPTY` transitions.
 - Debug is mandatory from day one.
 
 ## Project Structure
