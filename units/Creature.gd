@@ -294,15 +294,15 @@ func _collect_frontier_candidates() -> Array[Dictionary]:
 	var seen: Dictionary = {}
 	for cell in _survey_path:
 		for direction in CARDINAL_DIRS:
-			var front_block := cell + direction
+			var front_block: Vector2i = cell + direction
 			if not world.is_frontier_earth_block(front_block):
 				continue
-			var perpendicular := Vector2i(direction.y, -direction.x)
+			var perpendicular: Vector2i = Vector2i(direction.y, -direction.x)
 			for side_sign in [-1, 1]:
-				var second_mouth := cell + perpendicular * side_sign
+				var second_mouth: Vector2i = cell + perpendicular * side_sign
 				if not region_map.has(second_mouth):
 					continue
-				var second_front := second_mouth + direction
+				var second_front: Vector2i = second_mouth + direction
 				if not world.is_frontier_earth_block(second_front):
 					continue
 				var key := "%s|%s|%s" % [cell, second_mouth, direction]
@@ -382,6 +382,7 @@ func _next_dig_cell() -> Vector2i:
 			return Vector2i(-1, -1)
 		_dig_depth += 1
 		_dig_row_pending = next_row
+	return Vector2i(-1, -1)
 
 func _build_dig_row(depth: int) -> Array[Vector2i]:
 	if _frontier_target.is_empty():
