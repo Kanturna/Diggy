@@ -110,6 +110,20 @@ func _build_debug_text(cell: Vector2i) -> String:
 					float(creature_debug.get("perception_boost", 0.0)),
 				]
 			)
+			var cavity_target_cell: Vector2i = creature_debug.get("cavity_target_cell", Vector2i(-1, -1))
+			var cavity_target_direction: Vector2 = creature_debug.get("cavity_target_direction", Vector2.ZERO)
+			lines.append(
+				"Cavity: found=%s cell=(%d,%d) dir=(%.0f,%.0f) dist=%.2f bonus=%.2f" % [
+					str(creature_debug.get("has_cavity_target", false)),
+					cavity_target_cell.x,
+					cavity_target_cell.y,
+					cavity_target_direction.x,
+					cavity_target_direction.y,
+					float(creature_debug.get("cavity_target_distance_cells", -1.0)),
+					float(creature_debug.get("cavity_target_direction_bonus", 0.0)),
+				]
+			)
+			lines.append("Cavity reason: %s" % str(creature_debug.get("cavity_target_reason", "")))
 			lines.append(
 				"Penalty: parallel=%.2f niche=%.2f scrape=%.2f crowd=%.2f" % [
 					float(creature_debug.get("parallel_risk", 0.0)),

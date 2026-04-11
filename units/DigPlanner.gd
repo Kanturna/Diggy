@@ -8,6 +8,8 @@ const TOP_K := 5
 const SENSOR_SCORE_WEIGHT := 0.55
 const PERCEPTION_BOOST_WEIGHT := 0.95
 const GENERAL_HOLLOW_WEIGHT := 0.95
+const CAVITY_TARGET_DIRECTION_WEIGHT := 1.45
+const CAVITY_TARGET_DISTANCE_WEIGHT := 0.55
 const CONTINUITY_WEIGHT := 1.15
 const DEPTH_WEIGHT := 1.45
 const PARALLEL_WEIGHT := 1.25
@@ -42,6 +44,10 @@ func choose_candidate(
 
 	var entries_by_cell: Dictionary = {}
 	var candidates: Array[Dictionary] = []
+	var general_cavity_target: Dictionary = snapshot.get("general_cavity_target", {})
+	var has_cavity_target := bool(general_cavity_target.get("found", false))
+	var cavity_target_direction: Vector2i = general_cavity_target.get("direction", Vector2i.ZERO)
+	var cavity_target_distance_score := float(general_cavity_target.get("distance_score", 0.0))
 	var cluster_ids_by_frontier := _cluster_ids_by_frontier(snapshot)
 	var metrics_by_cell: Dictionary = snapshot.get("frontier_metrics_by_cell", {})
 	for frontier_cell_variant in metrics_by_cell.keys():
@@ -74,10 +80,16 @@ func choose_candidate(
 			)
 			var perception_boost := perception_interest * perception_score * PERCEPTION_BOOST_WEIGHT
 			var general_hollow_bonus := sensor_general_hollow_score * perception_score * GENERAL_HOLLOW_WEIGHT
+			var cavity_target_alignment := 0.0
+			var cavity_target_direction_bonus := 0.0
+			if has_cavity_target and cavity_target_direction != Vector2i.ZERO:
+				cavity_target_alignment = maxf(0.0, _continuity_score(cavity_target_direction, dig_direction))
+				cavity_target_direction_bonus = cavity_target_alignment * (CAVITY_TARGET_DIRECTION_WEIGHT + cavity_target_distance_score * CAVITY_TARGET_DISTANCE_WEIGHT)
 			var sensor_score := sensor_hollow_score * SENSOR_HOLLOW_WEIGHT \
 				+ sensor_open_span_score * SENSOR_OPEN_SPAN_WEIGHT \
 				+ general_hollow_bonus \
-				+ perception_boost
+				+ perception_boost \
+				+ cavity_target_direction_bonus
 			# Build score is the backbone; sensors only steer plausible tunnel moves.
 			var build_score := continuity_score * CONTINUITY_WEIGHT \
 				+ depth_score * DEPTH_WEIGHT \
@@ -106,6 +118,14 @@ func choose_candidate(
 				"perception_score": perception_score,
 				"general_hollow_bonus": general_hollow_bonus,
 				"perception_boost": perception_boost,
+				"has_cavity_target": has_cavity_target,
+				"cavity_target_cell": general_cavity_target.get("target_cell", Vector2i(-1, -1)),
+				"cavity_target_direction": cavity_target_direction,
+				"cavity_target_distance_cells": float(general_cavity_target.get("distance_cells", -1.0)),
+				"cavity_target_distance_score": cavity_target_distance_score,
+				"cavity_target_reason": str(general_cavity_target.get("reason", "")),
+				"cavity_target_alignment": cavity_target_alignment,
+				"cavity_target_direction_bonus": cavity_target_direction_bonus,
 				"parallel_risk": parallel_risk,
 				"niche_risk": niche_risk,
 				"scrape_penalty": scrape_penalty,

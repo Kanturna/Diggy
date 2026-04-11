@@ -2,6 +2,7 @@ extends RefCounted
 class_name CaveRegionAnalysis
 
 const MaterialType = preload("res://core/MaterialType.gd")
+const Config = preload("res://core/Config.gd")
 
 const CARDINAL_DIRS: Array[Vector2i] = [
 	Vector2i.RIGHT,
@@ -49,6 +50,65 @@ func get_region_snapshot(origin_cell: Vector2i) -> Dictionary:
 		var cell: Vector2i = cell_variant
 		_region_anchor_by_cell[cell] = snapshot_anchor
 	return snapshot
+
+
+func scan_general_hollow_target(origin_cell: Vector2i) -> Dictionary:
+	if world == null:
+		return {}
+	if not world.is_in_bounds(origin_cell.x, origin_cell.y):
+		return {}
+	var snapshot: Dictionary = get_region_snapshot(origin_cell)
+	if snapshot.is_empty():
+		return {}
+	var region_lookup: Dictionary = snapshot.get("region_lookup", {})
+	if region_lookup.is_empty():
+		return {}
+	var radius: int = int(Config.CREATURE_PERCEPTION_RADIUS_CELLS)
+	if radius <= 0:
+		return {}
+
+	var best_cell := Vector2i(-1, -1)
+	var best_dist_sq := INF
+	for y in range(origin_cell.y - radius, origin_cell.y + radius + 1):
+		for x in range(origin_cell.x - radius, origin_cell.x + radius + 1):
+			var candidate := Vector2i(x, y)
+			if not world.is_in_bounds(candidate.x, candidate.y):
+				continue
+			if region_lookup.has(candidate):
+				continue
+			if world.get_material(candidate.x, candidate.y) != MaterialType.Id.EMPTY:
+				continue
+			var dx := candidate.x - origin_cell.x
+			var dy := candidate.y - origin_cell.y
+			var dist_sq := float(dx * dx + dy * dy)
+			if dist_sq > float(radius * radius):
+				continue
+			if dist_sq < best_dist_sq or (is_equal_approx(dist_sq, best_dist_sq) and _is_cell_before(candidate, best_cell)):
+				best_dist_sq = dist_sq
+				best_cell = candidate
+
+	if best_cell.x < 0:
+		return {
+			"found": false,
+			"target_cell": Vector2i(-1, -1),
+			"direction": Vector2i.ZERO,
+			"distance_cells": -1.0,
+			"distance_score": 0.0,
+			"reason": "no_external_hollow_in_radius",
+		}
+
+	var offset := best_cell - origin_cell
+	var distance_cells := sqrt(best_dist_sq)
+	var direction := _cardinal_from_delta(offset)
+	var distance_score := clampf(1.0 - (distance_cells / maxf(float(radius), 0.001)), 0.0, 1.0)
+	return {
+		"found": true,
+		"target_cell": best_cell,
+		"direction": direction,
+		"distance_cells": distance_cells,
+		"distance_score": distance_score,
+		"reason": "found_external_hollow",
+	}
 
 func build_reachability(snapshot: Dictionary, start_cell: Vector2i) -> Dictionary:
 	var reachability: Dictionary = {
@@ -248,6 +308,14 @@ func _build_frontier_clusters(frontier_staging_by_cell: Dictionary, frontier_met
 		)
 	)
 	return clusters
+
+
+func _cardinal_from_delta(delta: Vector2i) -> Vector2i:
+	if delta == Vector2i.ZERO:
+		return Vector2i.ZERO
+	if abs(delta.x) >= abs(delta.y):
+		return Vector2i(1 if delta.x >= 0 else -1, 0)
+	return Vector2i(0, 1 if delta.y >= 0 else -1)
 
 func _sorted_cells_from_lookup(lookup: Dictionary) -> Array[Vector2i]:
 	var cells: Array[Vector2i] = []

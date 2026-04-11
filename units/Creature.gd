@@ -175,6 +175,12 @@ func get_debug_snapshot() -> Dictionary:
 		"perception_score": float(_traversal_plan.get("perception_score", 0.0)),
 		"general_hollow_bonus": float(_traversal_plan.get("general_hollow_bonus", 0.0)),
 		"perception_boost": float(_traversal_plan.get("perception_boost", 0.0)),
+		"has_cavity_target": bool(_traversal_plan.get("has_cavity_target", false)),
+		"cavity_target_cell": _traversal_plan.get("cavity_target_cell", Vector2i(-1, -1)),
+		"cavity_target_direction": Vector2(float(_traversal_plan.get("cavity_target_direction", Vector2i.ZERO).x), float(_traversal_plan.get("cavity_target_direction", Vector2i.ZERO).y)),
+		"cavity_target_distance_cells": float(_traversal_plan.get("cavity_target_distance_cells", -1.0)),
+		"cavity_target_reason": str(_traversal_plan.get("cavity_target_reason", "")),
+		"cavity_target_direction_bonus": float(_traversal_plan.get("cavity_target_direction_bonus", 0.0)),
 		"parallel_risk": float(_traversal_plan.get("parallel_risk", 0.0)),
 		"niche_risk": float(_traversal_plan.get("niche_risk", 0.0)),
 		"scrape_penalty": float(_traversal_plan.get("scrape_penalty", 0.0)),
@@ -373,8 +379,11 @@ func _planner_result(
 		if update_debug:
 			_clear_frontier_debug_scores()
 		return {}
+	var planner_snapshot := snapshot.duplicate(true)
+	if cave_analysis != null:
+		planner_snapshot["general_cavity_target"] = cave_analysis.scan_general_hollow_target(origin_cell)
 	var planner_result := _dig_planner.choose_candidate(
-		snapshot,
+		planner_snapshot,
 		reachability,
 		origin_cell,
 		_planner_reference_direction(),
@@ -422,6 +431,13 @@ func _traversal_plan_from_candidate(
 		"perception_score": float(candidate.get("perception_score", 0.0)),
 		"general_hollow_bonus": float(candidate.get("general_hollow_bonus", 0.0)),
 		"perception_boost": float(candidate.get("perception_boost", 0.0)),
+		"has_cavity_target": bool(candidate.get("has_cavity_target", false)),
+		"cavity_target_cell": candidate.get("cavity_target_cell", Vector2i(-1, -1)),
+		"cavity_target_direction": candidate.get("cavity_target_direction", Vector2i.ZERO),
+		"cavity_target_distance_cells": float(candidate.get("cavity_target_distance_cells", -1.0)),
+		"cavity_target_reason": str(candidate.get("cavity_target_reason", "")),
+		"cavity_target_alignment": float(candidate.get("cavity_target_alignment", 0.0)),
+		"cavity_target_direction_bonus": float(candidate.get("cavity_target_direction_bonus", 0.0)),
 		"parallel_risk": float(candidate.get("parallel_risk", 0.0)),
 		"niche_risk": float(candidate.get("niche_risk", 0.0)),
 		"scrape_penalty": float(candidate.get("scrape_penalty", 0.0)),
@@ -718,6 +734,13 @@ func _commit_local_frontier_option(option: Dictionary) -> void:
 		_traversal_plan["perception_score"] = float(option.get("perception_score", 0.0))
 		_traversal_plan["general_hollow_bonus"] = float(option.get("general_hollow_bonus", 0.0))
 		_traversal_plan["perception_boost"] = float(option.get("perception_boost", 0.0))
+		_traversal_plan["has_cavity_target"] = bool(option.get("has_cavity_target", false))
+		_traversal_plan["cavity_target_cell"] = option.get("cavity_target_cell", Vector2i(-1, -1))
+		_traversal_plan["cavity_target_direction"] = option.get("cavity_target_direction", Vector2i.ZERO)
+		_traversal_plan["cavity_target_distance_cells"] = float(option.get("cavity_target_distance_cells", -1.0))
+		_traversal_plan["cavity_target_reason"] = str(option.get("cavity_target_reason", ""))
+		_traversal_plan["cavity_target_alignment"] = float(option.get("cavity_target_alignment", 0.0))
+		_traversal_plan["cavity_target_direction_bonus"] = float(option.get("cavity_target_direction_bonus", 0.0))
 		_traversal_plan["parallel_risk"] = float(option.get("parallel_risk", 0.0))
 		_traversal_plan["niche_risk"] = float(option.get("niche_risk", 0.0))
 		_traversal_plan["scrape_penalty"] = float(option.get("scrape_penalty", 0.0))
