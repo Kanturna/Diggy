@@ -171,7 +171,9 @@ func get_debug_snapshot() -> Dictionary:
 		"continuity_score": float(_traversal_plan.get("continuity_score", 0.0)),
 		"sensor_hollow_score": float(_traversal_plan.get("sensor_hollow_score", 0.0)),
 		"sensor_open_span_score": float(_traversal_plan.get("sensor_open_span_score", 0.0)),
+		"sensor_general_hollow_score": float(_traversal_plan.get("sensor_general_hollow_score", 0.0)),
 		"perception_score": float(_traversal_plan.get("perception_score", 0.0)),
+		"general_hollow_bonus": float(_traversal_plan.get("general_hollow_bonus", 0.0)),
 		"perception_boost": float(_traversal_plan.get("perception_boost", 0.0)),
 		"parallel_risk": float(_traversal_plan.get("parallel_risk", 0.0)),
 		"niche_risk": float(_traversal_plan.get("niche_risk", 0.0)),
@@ -416,7 +418,9 @@ func _traversal_plan_from_candidate(
 		"depth_score": float(candidate.get("depth_score", 0.0)),
 		"sensor_hollow_score": float(candidate.get("sensor_hollow_score", 0.0)),
 		"sensor_open_span_score": float(candidate.get("sensor_open_span_score", 0.0)),
+		"sensor_general_hollow_score": float(candidate.get("sensor_general_hollow_score", 0.0)),
 		"perception_score": float(candidate.get("perception_score", 0.0)),
+		"general_hollow_bonus": float(candidate.get("general_hollow_bonus", 0.0)),
 		"perception_boost": float(candidate.get("perception_boost", 0.0)),
 		"parallel_risk": float(candidate.get("parallel_risk", 0.0)),
 		"niche_risk": float(candidate.get("niche_risk", 0.0)),
@@ -710,7 +714,9 @@ func _commit_local_frontier_option(option: Dictionary) -> void:
 		_traversal_plan["depth_score"] = float(option.get("depth_score", 0.0))
 		_traversal_plan["sensor_hollow_score"] = float(option.get("sensor_hollow_score", 0.0))
 		_traversal_plan["sensor_open_span_score"] = float(option.get("sensor_open_span_score", 0.0))
+		_traversal_plan["sensor_general_hollow_score"] = float(option.get("sensor_general_hollow_score", 0.0))
 		_traversal_plan["perception_score"] = float(option.get("perception_score", 0.0))
+		_traversal_plan["general_hollow_bonus"] = float(option.get("general_hollow_bonus", 0.0))
 		_traversal_plan["perception_boost"] = float(option.get("perception_boost", 0.0))
 		_traversal_plan["parallel_risk"] = float(option.get("parallel_risk", 0.0))
 		_traversal_plan["niche_risk"] = float(option.get("niche_risk", 0.0))
@@ -777,13 +783,16 @@ func _choose_next_dig_cell() -> Vector2i:
 	if head_cell.x < 0:
 		return Vector2i(-1, -1)
 	var forward_candidate := _preferred_forward_dig_cell(head_cell)
+	var branch_option := _find_local_frontier_option(head_cell, 0)
+	if _should_branch_from_forward(branch_option, forward_candidate):
+		_commit_local_frontier_option(branch_option)
+		return branch_option.get("frontier_cell", Vector2i(-1, -1))
 	if forward_candidate.x >= 0:
 		return forward_candidate
-	var option := _find_local_frontier_option(head_cell, 0)
-	if option.is_empty():
+	if branch_option.is_empty():
 		return Vector2i(-1, -1)
-	_commit_local_frontier_option(option)
-	return option.get("frontier_cell", Vector2i(-1, -1))
+	_commit_local_frontier_option(branch_option)
+	return branch_option.get("frontier_cell", Vector2i(-1, -1))
 
 func _preferred_forward_dig_cell(head_cell: Vector2i) -> Vector2i:
 	if _dig_direction == Vector2i.ZERO:
@@ -792,6 +801,22 @@ func _preferred_forward_dig_cell(head_cell: Vector2i) -> Vector2i:
 	if world.is_frontier_earth_block(candidate):
 		return candidate
 	return Vector2i(-1, -1)
+
+func _should_branch_from_forward(option: Dictionary, forward_candidate: Vector2i) -> bool:
+	if option.is_empty():
+		return false
+	var candidate_frontier: Vector2i = option.get("frontier_cell", Vector2i(-1, -1))
+	if candidate_frontier.x < 0:
+		return false
+	if candidate_frontier == forward_candidate:
+		return false
+	var general_signal := float(option.get("sensor_general_hollow_score", 0.0))
+	var directed_signal := maxf(
+		float(option.get("sensor_hollow_score", 0.0)),
+		float(option.get("sensor_open_span_score", 0.0))
+	)
+	var branch_score := float(option.get("sensor_score", 0.0)) + general_signal * 0.65 + directed_signal * 0.45
+	return branch_score >= 0.72
 
 func _has_broken_through() -> bool:
 	var origin_region_lookup: Dictionary = _traversal_plan.get("origin_region_lookup", {})

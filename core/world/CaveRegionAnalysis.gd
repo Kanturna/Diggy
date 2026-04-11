@@ -14,6 +14,7 @@ const FRONTIER_DEPTH_LATERAL_RANGE := 1
 const FRONTIER_SENSOR_DISTANCE_MAX := 6
 const FRONTIER_SENSOR_LATERAL_MAX := 2
 const FRONTIER_PARALLEL_FORWARD_MAX := 5
+const CREATURE_GENERAL_SENSOR_RAYS := 24
 
 var world: WorldModel = null
 var _cached_revision := -1
@@ -290,12 +291,14 @@ func _evaluate_frontier_direction(
 	var continuation_count := _count_forward_earth_options(frontier_cell, staging_cell)
 	var sensor_hollow_score := float(sensor_metrics.get("sensor_hollow_score", 0.0))
 	var sensor_open_span_score := float(sensor_metrics.get("sensor_open_span_score", 0.0))
+	var sensor_general_hollow_score := float(sensor_metrics.get("sensor_general_hollow_score", 0.0))
 	var niche_risk := _niche_risk(continuation_count, depth_score, sensor_hollow_score, sensor_open_span_score)
 
 	return {
 		"depth_score": depth_score,
 		"sensor_hollow_score": sensor_hollow_score,
 		"sensor_open_span_score": sensor_open_span_score,
+		"sensor_general_hollow_score": sensor_general_hollow_score,
 		"parallel_risk": parallel_risk,
 		"niche_risk": niche_risk,
 		"scrape_penalty": scrape_penalty,
@@ -349,10 +352,36 @@ func _scan_external_sensor(frontier_cell: Vector2i, dig_direction: Vector2i, reg
 		var density := clampf(float(open_hit_count) / float(maxi(max_samples, 1)), 0.0, 1.0)
 		var span := clampf(float(lateral_buckets.size() - 1) / 2.0, 0.0, 1.0)
 		sensor_open_span_score = clampf(0.60 * density + 0.40 * span, 0.0, 1.0)
+	var sensor_general_hollow_score := _scan_general_hollow_proximity(frontier_cell, region_lookup)
 	return {
 		"sensor_hollow_score": sensor_hollow_score,
 		"sensor_open_span_score": sensor_open_span_score,
+		"sensor_general_hollow_score": sensor_general_hollow_score,
 	}
+
+func _scan_general_hollow_proximity(frontier_cell: Vector2i, region_lookup: Dictionary) -> float:
+	var nearest_distance := FRONTIER_SENSOR_DISTANCE_MAX + 1
+	var origin := Vector2(
+		float(frontier_cell.x) + 0.5,
+		float(frontier_cell.y) + 0.5
+	)
+	for ray_idx in range(CREATURE_GENERAL_SENSOR_RAYS):
+		var angle := TAU * float(ray_idx) / float(CREATURE_GENERAL_SENSOR_RAYS)
+		var ray := Vector2.RIGHT.rotated(angle)
+		for step in range(1, FRONTIER_SENSOR_DISTANCE_MAX + 1):
+			var sample_pos := origin + ray * float(step)
+			var sample_cell := Vector2i(
+				int(floor(sample_pos.x)),
+				int(floor(sample_pos.y))
+			)
+			if not world.is_in_bounds(sample_cell.x, sample_cell.y):
+				break
+			if world.get_material(sample_cell.x, sample_cell.y) == MaterialType.Id.EARTH:
+				continue
+			if not region_lookup.has(sample_cell):
+				nearest_distance = mini(nearest_distance, step)
+			break
+	return _distance_to_score(nearest_distance, FRONTIER_SENSOR_DISTANCE_MAX)
 
 func _scan_parallel_tunnel(frontier_cell: Vector2i, dig_direction: Vector2i) -> float:
 	var perpendicular := Vector2i(dig_direction.y, -dig_direction.x)

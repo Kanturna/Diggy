@@ -102,9 +102,11 @@ func _build_debug_text(cell: Vector2i) -> String:
 				]
 			)
 			lines.append(
-				"Sense: radius=%.1f cells proximity=%.2f boost=%.2f" % [
+				"Sense: radius=%.1f cells proximity=%.2f general=%.2f bonus=%.2f boost=%.2f" % [
 					float(creature_debug.get("perception_radius_cells", 0.0)),
 					float(creature_debug.get("perception_score", 0.0)),
+					float(creature_debug.get("sensor_general_hollow_score", 0.0)),
+					float(creature_debug.get("general_hollow_bonus", 0.0)),
 					float(creature_debug.get("perception_boost", 0.0)),
 				]
 			)

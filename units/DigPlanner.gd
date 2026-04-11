@@ -6,7 +6,8 @@ const Config = preload("res://core/Config.gd")
 const TOP_K := 5
 
 const SENSOR_SCORE_WEIGHT := 0.55
-const PERCEPTION_BOOST_WEIGHT := 0.85
+const PERCEPTION_BOOST_WEIGHT := 0.95
+const GENERAL_HOLLOW_WEIGHT := 0.95
 const CONTINUITY_WEIGHT := 1.15
 const DEPTH_WEIGHT := 1.45
 const PARALLEL_WEIGHT := 1.25
@@ -62,14 +63,20 @@ func choose_candidate(
 			var depth_score := float(metric.get("depth_score", 0.0))
 			var sensor_hollow_score := float(metric.get("sensor_hollow_score", 0.0))
 			var sensor_open_span_score := float(metric.get("sensor_open_span_score", 0.0))
+			var sensor_general_hollow_score := float(metric.get("sensor_general_hollow_score", 0.0))
 			var parallel_risk := float(metric.get("parallel_risk", 0.0))
 			var niche_risk := float(metric.get("niche_risk", 0.0))
 			var scrape_penalty := float(metric.get("scrape_penalty", 0.0))
 			var perception_score := _perception_radius_score(origin_cell, frontier_cell)
-			var perception_interest := maxf(sensor_hollow_score, sensor_open_span_score)
+			var perception_interest := maxf(
+				maxf(sensor_hollow_score, sensor_open_span_score),
+				sensor_general_hollow_score
+			)
 			var perception_boost := perception_interest * perception_score * PERCEPTION_BOOST_WEIGHT
+			var general_hollow_bonus := sensor_general_hollow_score * perception_score * GENERAL_HOLLOW_WEIGHT
 			var sensor_score := sensor_hollow_score * SENSOR_HOLLOW_WEIGHT \
 				+ sensor_open_span_score * SENSOR_OPEN_SPAN_WEIGHT \
+				+ general_hollow_bonus \
 				+ perception_boost
 			# Build score is the backbone; sensors only steer plausible tunnel moves.
 			var build_score := continuity_score * CONTINUITY_WEIGHT \
@@ -95,7 +102,9 @@ func choose_candidate(
 				"depth_score": depth_score,
 				"sensor_hollow_score": sensor_hollow_score,
 				"sensor_open_span_score": sensor_open_span_score,
+				"sensor_general_hollow_score": sensor_general_hollow_score,
 				"perception_score": perception_score,
+				"general_hollow_bonus": general_hollow_bonus,
 				"perception_boost": perception_boost,
 				"parallel_risk": parallel_risk,
 				"niche_risk": niche_risk,
